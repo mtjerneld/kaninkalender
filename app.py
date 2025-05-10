@@ -289,6 +289,7 @@ def mark_task_missed(task_id):
     })
 
 @app.route('/api/reminder-check')
+@require_api_key
 def check_reminders():
     today = datetime.now().date()
     

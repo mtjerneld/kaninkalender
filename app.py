@@ -34,6 +34,14 @@ app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
+# Kör migrationer på Render
+if 'RENDER' in os.environ:
+    with app.app_context():
+        from flask_migrate import upgrade
+        print("🔄 Running migrations on Render...")
+        upgrade()
+        print("✅ Migrations completed!")
+
 # Hämta titel från miljövariabel eller använd default
 CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
 

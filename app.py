@@ -14,7 +14,17 @@ app = Flask(__name__, instance_path=instance_path, instance_relative_config=True
 
 # Konfigurera databasen
 db_filename = 'kaninkalender.db'
-db_path = os.path.join(instance_path, db_filename)
+
+if 'RENDER' in os.environ:
+    # Render monterar 'instance/' korrekt
+    db_path = os.path.join(app.instance_path, db_filename)
+    print("🌐 Running on Render, using instance/ for database")
+else:
+    # Lokalt kan du använda t.ex. en annan plats
+    db_path = os.path.join('local_instance', db_filename)
+    os.makedirs('local_instance', exist_ok=True)
+    print("💻 Running locally, using local_instance/ for database")
+
 print(f"📁 Databasen laddas från: {db_path}")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'

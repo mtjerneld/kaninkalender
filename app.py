@@ -264,9 +264,17 @@ def check_reminders():
     
     return jsonify(reminders)
 
-@app.before_first_request
-def create_tables():
-    db.create_all()
+def init_db():
+    with app.app_context():
+        # Kontrollera om databasen redan har tabeller
+        inspector = db.inspect(db.engine)
+        if not inspector.has_table('schedule'):
+            print("Creating database tables...")
+            db.create_all()
+            print("Database tables created successfully!")
+        else:
+            print("Database tables already exist, skipping creation.")
 
 if __name__ == '__main__':
+    init_db()  # Initiera databasen vid start
     app.run(debug=True) 

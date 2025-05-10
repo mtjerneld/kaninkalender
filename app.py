@@ -5,26 +5,25 @@ from datetime import datetime, timedelta
 import json
 import os
 
-# Konfigurera instance-mappen
-instance_path = os.path.join(os.path.dirname(__file__), 'instance')
-os.makedirs(instance_path, exist_ok=True)
+def ensure_db_directory():
+    """Säkerställ att databaskatalogen finns och har rätt behörigheter."""
+    if 'RENDER' in os.environ:
+        # På Render använder vi instance/
+        db_dir = os.path.join(os.path.dirname(__file__), 'instance')
+    else:
+        # Lokalt använder vi local_instance/ i projektets rot
+        db_dir = os.path.join(os.path.dirname(__file__), 'local_instance')
+    
+    os.makedirs(db_dir, exist_ok=True)
+    print(f"📁 Databaskatalog: {db_dir}")
+    return db_dir
 
 # Skapa Flask-appen med korrekt instance_path
-app = Flask(__name__, instance_path=instance_path, instance_relative_config=True)
+app = Flask(__name__, instance_path=ensure_db_directory(), instance_relative_config=True)
 
 # Konfigurera databasen
 db_filename = 'kaninkalender.db'
-
-if 'RENDER' in os.environ:
-    # Render monterar 'instance/' korrekt
-    db_path = os.path.join(app.instance_path, db_filename)
-    print("🌐 Running on Render, using instance/ for database")
-else:
-    # Lokalt kan du använda t.ex. en annan plats
-    db_path = os.path.join('local_instance', db_filename)
-    os.makedirs('local_instance', exist_ok=True)
-    print("💻 Running locally, using local_instance/ for database")
-
+db_path = os.path.join(app.instance_path, db_filename)
 print(f"📁 Databasen laddas från: {db_path}")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
@@ -288,5 +287,13 @@ def check_reminders():
     
     return jsonify(reminders)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    # Kör bara detta när appen körs direkt, inte vid import
+    with app.app_context():
+        if not os.path.exists(db_path):
+            print(f"🆕 Första start – initierar databas: {db_path}")
+            from flask_migrate import upgrade
+            upgrade()
+        else:
+            print(f"✅ Databas finns redan: {db_path}")
     app.run(debug=True) 

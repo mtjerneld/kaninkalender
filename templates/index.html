@@ -270,7 +270,9 @@
 
         async function checkPassword() {
             const password = document.getElementById('password').value;
-            console.log('Attempting login with password:', password);
+            const loginError = document.getElementById('login-error');
+            const loginBtn = document.querySelector('.login-btn');
+            const loginBox = document.querySelector('.login-box');
             
             try {
                 const response = await fetch('/api/login', {
@@ -281,9 +283,7 @@
                     body: JSON.stringify({ password: password })
                 });
                 
-                console.log('Login response status:', response.status);
                 const data = await response.json();
-                console.log('Login response data:', data);
                 
                 if (response.ok) {
                     document.getElementById('login').style.display = 'none';
@@ -293,22 +293,56 @@
                     loadTasks();
                     loadSchedules();
                 } else {
-                    document.getElementById('login-error').classList.remove('hidden');
+                    loginError.textContent = data.error || 'Felaktigt lösenord';
+                    loginError.classList.remove('hidden');
                     document.getElementById('password').value = '';
+                    
+                    // Om användaren är blockerad, visa nedräkning
+                    if (response.status === 429) {
+                        const originalContent = loginBox.innerHTML;
+                        const blockEndTime = Date.now() + (30 * 1000);
+                        sessionStorage.setItem('loginBlockEndTime', blockEndTime);
+                        startBlockCountdown(loginBox, originalContent);
+                    }
                 }
             } catch (error) {
                 console.error('Login error:', error);
-                alert('Ett fel uppstod vid inloggning');
+                loginError.textContent = 'Ett fel uppstod vid inloggning';
+                loginError.classList.remove('hidden');
             }
         }
 
-        document.getElementById('password').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                checkPassword();
-            }
-        });
+        function startBlockCountdown(loginBox, originalContent) {
+            const blockEndTime = parseInt(sessionStorage.getItem('loginBlockEndTime'));
+            const updateCountdown = () => {
+                const now = Date.now();
+                const secondsLeft = Math.max(0, Math.ceil((blockEndTime - now) / 1000));
+                
+                if (secondsLeft > 0) {
+                    loginBox.innerHTML = `
+                        <h3>För många försök</h3>
+                        <p>Försök igen om ${secondsLeft} sekunder</p>
+                    `;
+                    setTimeout(updateCountdown, 1000);
+                } else {
+                    sessionStorage.removeItem('loginBlockEndTime');
+                    loginBox.innerHTML = originalContent;
+                    document.getElementById('login-error').classList.add('hidden');
+                }
+            };
+            
+            updateCountdown();
+        }
 
         document.addEventListener('DOMContentLoaded', function() {
+            // Kontrollera om användaren är blockerad vid sidladdning
+            const blockEndTime = sessionStorage.getItem('loginBlockEndTime');
+            if (blockEndTime) {
+                const loginBox = document.querySelector('.login-box');
+                const originalContent = loginBox.innerHTML;
+                startBlockCountdown(loginBox, originalContent);
+            }
+            
             fetch('/api/check-session')
                 .then(response => response.json())
                 .then(data => {

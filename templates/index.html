@@ -12,17 +12,19 @@
 </head>
 <body>
     <div class="container">
-        <h1>🐰 {{ calendar_title }} 🐰</h1>
+        <h1 class="main-title">🐰 {{ calendar_title }} 🐰</h1>
         
         <div id="login" class="login-section">
-            <div class="login-box">
+            <div class="login-content">
                 <h1 class="login-title">🐰 {{ calendar_title }} 🐰</h1>
-                <h3>Logga in</h3>
-                <div class="form-group">
-                    <input type="password" id="password" placeholder="Ange lösenord" class="password-input">
-                    <button onclick="checkPassword()" class="login-btn">Logga in</button>
+                <div class="login-box">
+                    <h3>Logga in</h3>
+                    <div class="form-group">
+                        <input type="password" id="password" placeholder="Ange lösenord" class="password-input">
+                        <button onclick="checkPassword()" class="login-btn">Logga in</button>
+                    </div>
+                    <p id="login-error" class="error-message hidden">Felaktigt lösenord</p>
                 </div>
-                <p id="login-error" class="error-message hidden">Felaktigt lösenord</p>
             </div>
         </div>
 
@@ -31,7 +33,7 @@
                 <h3>Dagens uppgifter</h3>
                 <div id="tasks">
                     {% for task in today_tasks %}
-                    <div class="task {% if task.completed %}completed{% endif %}">
+                    <div class="task {% if task.completed %}completed{% endif %}" data-task-id="{{ task.id }}">
                         <button onclick="toggleTask('{{ task.id }}', 'completed')" class="task-btn">
                             Aktivitet utförd
                         </button>
@@ -267,23 +269,26 @@
         }
 
         async function checkPassword() {
+            const password = document.getElementById('password').value;
+            console.log('Attempting login with password:', password);
+            
             try {
-                const password = document.getElementById('password').value;
                 const response = await fetch('/api/login', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ password })
+                    body: JSON.stringify({ password: password })
                 });
                 
+                console.log('Login response status:', response.status);
+                const data = await response.json();
+                console.log('Login response data:', data);
+                
                 if (response.ok) {
-                    // Dölj hela login-sektionen
                     document.getElementById('login').style.display = 'none';
                     document.getElementById('calendar-content').classList.remove('hidden');
-                    sessionStorage.setItem('isLoggedIn', 'true');
                     
-                    // Initiera kalendern direkt efter inloggning
                     initCalendar();
                     loadTasks();
                     loadSchedules();
@@ -292,12 +297,11 @@
                     document.getElementById('password').value = '';
                 }
             } catch (error) {
-                document.getElementById('login-error').textContent = 'Ett fel uppstod vid inloggning';
-                document.getElementById('login-error').classList.remove('hidden');
+                console.error('Login error:', error);
+                alert('Ett fel uppstod vid inloggning');
             }
         }
 
-        // Lägg till Enter-tangent stöd för lösenordsfältet
         document.getElementById('password').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 checkPassword();
@@ -305,20 +309,21 @@
         });
 
         document.addEventListener('DOMContentLoaded', function() {
-            // Sätt dagens datum som default för startdatum
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('startDate').value = today;
-            
-            if (sessionStorage.getItem('isLoggedIn') === 'true') {
-                // Dölj hela login-sektionen
-                document.getElementById('login').style.display = 'none';
-                document.getElementById('calendar-content').classList.remove('hidden');
-                
-                // Initiera kalendern vid sidladdning om användaren är inloggad
-                initCalendar();
-                loadTasks();
-                loadSchedules();
-            }
+            fetch('/api/check-session')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.logged_in) {
+                        document.getElementById('login').style.display = 'none';
+                        document.getElementById('calendar-content').classList.remove('hidden');
+                        
+                        initCalendar();
+                        loadTasks();
+                        loadSchedules();
+                    }
+                })
+                .catch(error => {
+                    console.error('Fel vid kontroll av session:', error);
+                });
         });
 
         function formatDate(date) {
@@ -334,7 +339,6 @@
             today.setHours(0, 0, 0, 0);
             const isPastOrToday = originalDate <= today;
             
-            // Skapa popup-innehåll
             const popupContent = document.createElement('div');
             popupContent.className = 'task-popup';
             popupContent.innerHTML = `
@@ -342,7 +346,7 @@
                     <h3>${event.title}</h3>
                     <span class="rabbit-icon">🐰</span>
                 </div>
-                <p>Planerat datum: ${originalDate.toLocaleDateString('sv-SE')}</p>
+                <p>Planerat datum: ${event.start.toLocaleDateString('sv-SE')}</p>
                 ${isPastOrToday ? `
                     <div class="task-status">
                         <label>
@@ -363,22 +367,20 @@
                     <h4>Flytta aktivitet</h4>
                     <p>Om du flyttade denna aktivitet, välj när den utfördes istället:</p>
                     <input type="date" id="new-date" 
-                           min="${formatDate(new Date(originalDate.getTime() - 7 * 24 * 60 * 60 * 1000))}"
-                           max="${formatDate(new Date(originalDate.getTime() + 7 * 24 * 60 * 60 * 1000))}"
-                           value="${formatDate(originalDate)}">
+                           min="${formatDate(new Date(event.start.getTime() - 7 * 24 * 60 * 60 * 1000))}"
+                           max="${formatDate(new Date(event.start.getTime() + 7 * 24 * 60 * 60 * 1000))}"
+                           value="${formatDate(event.start)}">
                     <button onclick="rescheduleTask(${taskId})" class="reschedule-btn">
                         Flytta aktivitet
                     </button>
                 </div>
             `;
             
-            // Visa popup
             const popup = document.createElement('div');
             popup.className = 'popup-overlay';
             popup.appendChild(popupContent);
             document.body.appendChild(popup);
             
-            // Stäng popup när man klickar utanför
             popup.addEventListener('click', function(e) {
                 if (e.target === popup) {
                     document.body.removeChild(popup);
@@ -432,11 +434,9 @@
         function showAddScheduleForm() {
             const modal = new bootstrap.Modal(document.getElementById('newActivityModal'));
             
-            // Sätt dagens datum som standardvärde för startdatum
             const today = new Date().toISOString().split('T')[0];
             document.getElementById('newActivityStartDate').value = today;
             
-            // Sätt ett år fram i tiden som standardvärde för slutdatum
             const nextYear = new Date();
             nextYear.setFullYear(nextYear.getFullYear() + 1);
             document.getElementById('newActivityEndDate').value = nextYear.toISOString().split('T')[0];
@@ -481,7 +481,6 @@
             if (response.ok) {
                 await loadSchedules();
                 hideScheduleForm();
-                // Uppdatera kalendern
                 await loadTasks();
             }
         }
@@ -496,12 +495,10 @@
                 document.getElementById('editStartDate').value = schedule.start_date || '';
                 document.getElementById('editActiveCheck').checked = schedule.active;
                 
-                // Återställ alla dagar
                 for (let i = 0; i < 7; i++) {
                     document.getElementById(`editDay${i}`).checked = false;
                 }
                 
-                // Markera valda dagar
                 schedule.weekdays.forEach(day => {
                     document.getElementById(`editDay${day}`).checked = true;
                 });
@@ -572,7 +569,6 @@
 
             if (response.ok) {
                 await loadSchedules();
-                // Uppdatera kalendern
                 await loadTasks();
             }
         }
@@ -591,7 +587,6 @@
             
             if (response.ok) {
                 loadTasks();
-                // Stäng popup
                 const popup = document.querySelector('.popup-overlay');
                 if (popup) {
                     document.body.removeChild(popup);
@@ -614,14 +609,12 @@
                 }
                 const tasks = await response.json();
                 
-                // Rensa kalendern
                 calendar.removeAllEvents();
                 
-                // Lägg till uppgifterna i kalendern
                 tasks.forEach(task => {
                     const event = {
                         id: task.id,
-                        title: task.task_type || task.name, // Använd task_type om det finns, annars name
+                        title: task.task_type || task.name,
                         start: task.date,
                         extendedProps: {
                             taskId: task.id,
@@ -652,14 +645,66 @@
                 },
                 body: JSON.stringify({ status: status })
             });
-            
+
             if (response.ok) {
-                loadTasks();
-                // Stäng popup
+                const updatedTask = await response.json();
+
+                // Hitta och uppdatera DOM-elementet
+                const taskElement = document.querySelector(`[data-task-id="${taskId}"]`);
+                if (taskElement) {
+                    // Toggle completed-klassen på task-elementet
+                    taskElement.classList.toggle('completed', updatedTask.completed);
+                    taskElement.classList.toggle('missed', updatedTask.missed);
+                    
+                    // Toggle completed-klassen på knappen
+                    const button = taskElement.querySelector('.task-btn');
+                    if (button) {
+                        button.classList.toggle('completed', updatedTask.completed);
+                    }
+                    
+                    // Toggle completed-klassen på span-elementet
+                    const span = taskElement.querySelector('span');
+                    if (span) {
+                        span.classList.toggle('completed', updatedTask.completed);
+                    }
+                }
+
+                // Uppdatera kalendern
+                await loadTasks(calendar.view.currentStart, calendar.view.currentEnd);
+                
+                // Stäng popup om den finns
                 const popup = document.querySelector('.popup-overlay');
                 if (popup) {
                     document.body.removeChild(popup);
                 }
+            }
+        }
+
+        async function loadTodayTasks() {
+            try {
+                const response = await fetch('/api/tasks/today');
+                if (!response.ok) {
+                    throw new Error('Kunde inte hämta dagens uppgifter');
+                }
+                const tasks = await response.json();
+                
+                const tasksContainer = document.getElementById('tasks');
+                tasksContainer.innerHTML = '';
+                
+                tasks.forEach(task => {
+                    const taskElement = document.createElement('div');
+                    taskElement.className = `task ${task.completed ? 'completed' : ''}`;
+                    taskElement.setAttribute('data-task-id', task.id);
+                    taskElement.innerHTML = `
+                        <button onclick="toggleTask('${task.id}', 'completed')" class="task-btn">
+                            Aktivitet utförd
+                        </button>
+                        <span>${task.task_type}</span>
+                    `;
+                    tasksContainer.appendChild(taskElement);
+                });
+            } catch (error) {
+                console.error('Fel vid laddning av dagens uppgifter:', error);
             }
         }
 
@@ -669,22 +714,16 @@
                     method: 'POST'
                 });
                 
-                // Ta bort inloggningsstatus
-                sessionStorage.removeItem('isLoggedIn');
+                document.getElementById('login').style.display = 'block';
+                document.getElementById('calendar-content').classList.add('hidden');
                 
-                // Ta bort kalendern
+                document.getElementById('password').value = '';
+                document.getElementById('login-error').classList.add('hidden');
+                
                 if (calendar) {
                     calendar.destroy();
                     calendar = null;
                 }
-                
-                // Visa login-rutan och dölj kalenderinnehållet
-                document.getElementById('login').style.display = 'block';
-                document.getElementById('calendar-content').classList.add('hidden');
-                
-                // Rensa lösenordsfältet och felmeddelanden
-                document.getElementById('password').value = '';
-                document.getElementById('login-error').classList.add('hidden');
             } catch (error) {
                 console.error('Error during logout:', error);
             }
@@ -726,10 +765,9 @@
                 const newSchedule = await response.json();
                 schedules.push(newSchedule);
                 displaySchedules();
-                loadTasks(); // Ladda om uppgifterna för att visa det nya schemat
+                loadTasks();
                 bootstrap.Modal.getInstance(document.getElementById('newActivityModal')).hide();
                 
-                // Återställ formuläret
                 document.getElementById('newActivityForm').reset();
             } catch (error) {
                 console.error('Fel vid skapande av aktivitet:', error);
@@ -746,18 +784,15 @@
             document.getElementById('editActivityStartDate').value = schedule.start_date;
             document.getElementById('editActivityEndDate').value = schedule.end_date;
 
-            // Återställ alla checkboxar
             document.querySelectorAll('input[name="editDays"]').forEach(cb => {
                 cb.checked = false;
             });
 
-            // Markera de valda dagarna
             schedule.weekdays.forEach(day => {
                 const checkbox = document.querySelector(`input[name="editDays"][value="${day}"]`);
                 if (checkbox) checkbox.checked = true;
             });
 
-            // Spara schedule ID för uppdatering
             document.getElementById('editActivityForm').dataset.scheduleId = id;
 
             const editModal = new bootstrap.Modal(document.getElementById('editActivityModal'));
@@ -803,7 +838,7 @@
                     schedules[index] = updatedSchedule;
                 }
                 displaySchedules();
-                loadTasks(); // Ladda om uppgifterna för att visa ändringarna
+                loadTasks();
                 bootstrap.Modal.getInstance(document.getElementById('editActivityModal')).hide();
             } catch (error) {
                 console.error('Fel vid uppdatering av aktivitet:', error);

@@ -16,12 +16,19 @@ app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'default-secret-key')  # Lägg till en hemlig nyckel för sessions
 
 # Konfigurera databasen
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+database_url = os.getenv('DATABASE_URL')
+if database_url and database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
 
 # API-nyckel från miljövariabel
 API_KEY = os.getenv('API_KEY')
+
+# Lösenordshash från miljövariabel
+PASSWORD_HASH = os.getenv('PASSWORD_HASH', '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92')  # Default: "123456"
 
 def require_auth(f):
     @wraps(f)
@@ -143,21 +150,33 @@ def login():
     data = request.get_json()
     password = data.get('password')
     
-    # Använd samma lösenordshash som i frontend
-    correct_hash = '8df9143e64534756f8a2affcf87602b076471b6b62a9ab8276212ea0ddd3a24d'
-    
-    if password and sha256(password.encode()).hexdigest() == correct_hash:
-        session['is_logged_in'] = True
-        return jsonify({"success": True})
-    return jsonify({"error": "Invalid password"}), 401
+    if password and sha256(password.encode()).hexdigest() == PASSWORD_HASH:
+        session['logged_in'] = True
+        return jsonify({"message": "Login successful"})
+    else:
+        return jsonify({"error": "Invalid password"}), 401
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
-    session.pop('is_logged_in', None)
-    return jsonify({"success": True})
+    session.pop('logged_in', None)
+    return jsonify({"message": "Logged out successfully"})
+
+@app.route('/api/check-session')
+def check_session():
+    print(f"Checking session - Current session: {session.get('logged_in')}")
+    return jsonify({"logged_in": session.get('logged_in', False)})
+
+# Lägg till en decorator för att skydda routes som kräver inloggning
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated_function
 
 @app.route('/api/schedules', methods=['GET'])
-@require_auth
+@login_required
 def get_schedules():
     schedules = Schedule.query.all()
     return jsonify([schedule.to_dict() for schedule in schedules])

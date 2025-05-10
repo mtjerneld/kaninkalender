@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 from functools import wraps
 from hashlib import sha256
+import logging
 
 # Ladda miljövariabler från .env
 load_dotenv()
@@ -29,6 +30,43 @@ API_KEY = os.getenv('API_KEY')
 
 # Lösenordshash från miljövariabel
 PASSWORD_HASH = os.getenv('PASSWORD_HASH', '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92')  # Default: "123456"
+
+# Konfigurera logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Login attempts tracking
+login_attempts = {}
+MAX_LOGIN_ATTEMPTS = 3
+BLOCK_DURATION = 0.5  # minutes (30 seconds)
+
+def get_client_ip():
+    if request.headers.getlist("X-Forwarded-For"):
+        return request.headers.getlist("X-Forwarded-For")[0]
+    return request.remote_addr
+
+def is_ip_blocked(ip):
+    if ip in login_attempts:
+        attempts = login_attempts[ip]
+        if attempts['count'] >= MAX_LOGIN_ATTEMPTS:
+            block_time = attempts['last_attempt'] + timedelta(minutes=BLOCK_DURATION)
+            if datetime.now() < block_time:
+                return True
+            else:
+                # Reset attempts if block duration has passed
+                login_attempts[ip] = {'count': 0, 'last_attempt': datetime.now()}
+    return False
+
+def record_login_attempt(ip, success):
+    if ip not in login_attempts:
+        login_attempts[ip] = {'count': 0, 'last_attempt': datetime.now()}
+    
+    if not success:
+        login_attempts[ip]['count'] += 1
+    else:
+        login_attempts[ip]['count'] = 0
+    
+    login_attempts[ip]['last_attempt'] = datetime.now()
 
 def require_auth(f):
     @wraps(f)
@@ -148,30 +186,44 @@ def index():
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
-    password = data.get('password')
+    password = data.get('password', '')
+    client_ip = get_client_ip()
     
-    if password and sha256(password.encode()).hexdigest() == PASSWORD_HASH:
+    # Check if IP is blocked
+    if is_ip_blocked(client_ip):
+        remaining_time = (login_attempts[client_ip]['last_attempt'] + 
+                         timedelta(minutes=BLOCK_DURATION) - datetime.now())
+        seconds = int(remaining_time.total_seconds())
+        return jsonify({
+            'error': f'För många misslyckade inloggningsförsök. Försök igen om {seconds} sekunder.'
+        }), 429
+
+    # Hash the password
+    hashed_password = sha256(password.encode()).hexdigest()
+
+    if hashed_password == PASSWORD_HASH:
         session['logged_in'] = True
-        return jsonify({"message": "Login successful"})
+        record_login_attempt(client_ip, True)
+        return jsonify({'message': 'Login successful'})
     else:
-        return jsonify({"error": "Invalid password"}), 401
+        record_login_attempt(client_ip, False)
+        return jsonify({'error': 'Felaktigt lösenord'}), 401
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
     session.pop('logged_in', None)
-    return jsonify({"message": "Logged out successfully"})
+    return jsonify({'message': 'Logged out successfully'})
 
 @app.route('/api/check-session')
 def check_session():
-    print(f"Checking session - Current session: {session.get('logged_in')}")
-    return jsonify({"logged_in": session.get('logged_in', False)})
+    return jsonify({'logged_in': session.get('logged_in', False)})
 
 # Lägg till en decorator för att skydda routes som kräver inloggning
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not session.get('logged_in'):
-            return jsonify({"error": "Unauthorized"}), 401
+            return jsonify({'error': 'Unauthorized'}), 401
         return f(*args, **kwargs)
     return decorated_function
 

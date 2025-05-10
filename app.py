@@ -5,22 +5,16 @@ from datetime import datetime, timedelta
 import json
 import os
 
-app = Flask(__name__)
+# Konfigurera instance-mappen
+instance_path = os.path.join(os.path.dirname(__file__), 'instance')
+os.makedirs(instance_path, exist_ok=True)
 
-# Konfigurera databasen baserat på miljö
+# Skapa Flask-appen med korrekt instance_path
+app = Flask(__name__, instance_path=instance_path, instance_relative_config=True)
+
+# Konfigurera databasen
 db_filename = 'kaninkalender.db'
-
-# Använd /data på Render, annars instance-mappen lokalt
-if os.environ.get("RENDER"):
-    # Säkerställ att /data finns på Render
-    os.makedirs('/data', exist_ok=True)
-    db_path = os.path.join('/data', db_filename)
-    print("🌐 Running on Render, using /data for database")
-else:
-    os.makedirs(app.instance_path, exist_ok=True)
-    db_path = os.path.join(app.instance_path, db_filename)
-    print("💻 Running locally, using instance/ for database")
-
+db_path = os.path.join(instance_path, db_filename)
 print(f"📁 Databasen laddas från: {db_path}")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'

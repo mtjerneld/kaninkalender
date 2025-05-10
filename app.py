@@ -1,34 +1,30 @@
 from flask import Flask, render_template, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
 from datetime import datetime, timedelta
 import json
 import os
 
 app = Flask(__name__)
 
-# Konfigurera databasen baserat på miljö
-db_filename = 'kaninkalender.db'
+# Säkerställ att instansmappen existerar
+os.makedirs(app.instance_path, exist_ok=True)
 
-# Använd /data på Render, annars instance-mappen lokalt
-if os.path.exists('/data'):
-    db_path = os.path.join('/data', db_filename)
-else:
-    db_path = os.path.join(app.instance_path, db_filename)
-    os.makedirs(app.instance_path, exist_ok=True)
+# Konfigurera databasen
+db_filename = 'kaninkalender.db'
+db_path = os.path.join(app.instance_path, db_filename)
+print(f"📁 Databasen laddas från: {db_path}")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
+
+# Initiera databasen och migrations
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 # Hämta titel från miljövariabel eller använd default
 CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
-
-# Initiera databasen endast om filen saknas
-if not os.path.exists(db_path):
-    with app.app_context():
-        db.create_all()
-        print(f"✅ Databas skapades eftersom den inte fanns: {db_path}")
 
 class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -280,17 +276,5 @@ def check_reminders():
     
     return jsonify(reminders)
 
-def init_db():
-    with app.app_context():
-        # Kontrollera om databasen redan har tabeller
-        inspector = db.inspect(db.engine)
-        if not inspector.has_table('schedule'):
-            print("Creating database tables...")
-            db.create_all()
-            print("Database tables created successfully!")
-        else:
-            print("Database tables already exist, skipping creation.")
-
 if __name__ == '__main__':
-    init_db()  # Initiera databasen vid start
     app.run(debug=True) 

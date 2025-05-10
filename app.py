@@ -5,8 +5,15 @@ import json
 import os
 
 app = Flask(__name__)
-# Använd instance-mappen för databasen
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///kanin.db'
+
+# Konfigurera databasen baserat på miljö
+if os.path.exists('/data'):  # Vi är på Render
+    db_path = os.path.join('/data', 'kaninkalender.db')
+else:  # Vi är lokalt
+    db_path = os.path.join(app.instance_path, 'kaninkalender.db')
+    os.makedirs(app.instance_path, exist_ok=True)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
 db = SQLAlchemy(app)

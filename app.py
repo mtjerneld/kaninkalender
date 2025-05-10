@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import json
 import os
 from dotenv import load_dotenv
+from functools import wraps
 
 # Ladda miljövariabler från .env
 load_dotenv()
@@ -16,6 +17,18 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
+
+# API-nyckel från miljövariabel
+API_KEY = os.getenv('API_KEY')
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        api_key = request.headers.get('X-API-Key')
+        if api_key and api_key == API_KEY:
+            return f(*args, **kwargs)
+        return jsonify({"error": "Unauthorized"}), 401
+    return decorated_function
 
 # Initiera databasen och migrations
 db = SQLAlchemy(app)
@@ -104,11 +117,13 @@ def index():
     return render_template('index.html', today_tasks=today_tasks, calendar_title=CALENDAR_TITLE)
 
 @app.route('/api/schedules', methods=['GET'])
+@require_api_key
 def get_schedules():
     schedules = Schedule.query.all()
     return jsonify([schedule.to_dict() for schedule in schedules])
 
 @app.route('/api/schedules', methods=['POST'])
+@require_api_key
 def create_schedule():
     data = request.json
     end_date = None
@@ -135,6 +150,7 @@ def create_schedule():
     return jsonify(schedule.to_dict())
 
 @app.route('/api/schedules/<int:schedule_id>', methods=['PUT'])
+@require_api_key
 def update_schedule(schedule_id):
     schedule = Schedule.query.get_or_404(schedule_id)
     data = request.json
@@ -168,6 +184,7 @@ def update_schedule(schedule_id):
     return jsonify(schedule.to_dict())
 
 @app.route('/api/schedules/<int:schedule_id>', methods=['DELETE'])
+@require_api_key
 def delete_schedule(schedule_id):
     schedule = Schedule.query.get_or_404(schedule_id)
     
@@ -183,6 +200,7 @@ def delete_schedule(schedule_id):
     return '', 204
 
 @app.route('/api/tasks', methods=['GET'])
+@require_api_key
 def get_tasks():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
@@ -209,6 +227,7 @@ def get_tasks():
     } for task in tasks])
 
 @app.route('/api/tasks/<int:task_id>/toggle', methods=['POST'])
+@require_api_key
 def toggle_task(task_id):
     task = Task.query.get_or_404(task_id)
     data = request.get_json()
@@ -233,6 +252,7 @@ def toggle_task(task_id):
     })
 
 @app.route('/api/tasks/<int:task_id>/reschedule', methods=['POST'])
+@require_api_key
 def reschedule_task(task_id):
     task = Task.query.get_or_404(task_id)
     data = request.json
@@ -253,6 +273,7 @@ def reschedule_task(task_id):
     })
 
 @app.route('/api/tasks/<int:task_id>/missed', methods=['POST'])
+@require_api_key
 def mark_task_missed(task_id):
     task = Task.query.get_or_404(task_id)
     task.missed = True

@@ -12,6 +12,8 @@ db_filename = 'kaninkalender.db'
 
 # Använd /data på Render, annars instance-mappen lokalt
 if os.environ.get("RENDER"):
+    # Säkerställ att /data finns på Render
+    os.makedirs('/data', exist_ok=True)
     db_path = os.path.join('/data', db_filename)
     print("🌐 Running on Render, using /data for database")
 else:

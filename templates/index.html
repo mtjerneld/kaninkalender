@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mabel och Kikis underhållsschema</title>
+    <title>Mabel och Kikis kalender</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
 </head>
 <body>
     <div class="container">
-        <h1>🐰 Mabel och Kikis underhållsschema 🐰</h1>
+        <h1>🐰 Mabel och Kikis kalender 🐰</h1>
         
         <div id="login" class="login-section">
             <div class="login-box">
@@ -110,7 +111,7 @@
             try {
                 const password = document.getElementById('password').value;
                 const hashedPassword = await sha256(password);
-                const correctHash = '696eea8492902aa04d932987107d4e135022e859a756500448e754b4c3197671';
+                const correctHash = '8df9143e64534756f8a2affcf87602b076471b6b62a9ab8276212ea0ddd3a24d';
                 
                 if (hashedPassword === correctHash) {
                     // Dölj hela login-sektionen
@@ -125,9 +126,9 @@
                         locale: 'sv',
                         firstDay: 1,
                         headerToolbar: {
-                            left: 'prev,next today',
+                            left: 'prev,next',
                             center: 'title',
-                            right: ''
+                            right: 'today'
                         },
                         buttonText: {
                             today: 'Idag'
@@ -180,9 +181,9 @@
                     locale: 'sv',
                     firstDay: 1,
                     headerToolbar: {
-                        left: 'prev,next today',
+                        left: 'prev,next',
                         center: 'title',
-                        right: ''
+                        right: 'today'
                     },
                     buttonText: {
                         today: 'Idag'

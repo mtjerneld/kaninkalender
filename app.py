@@ -7,10 +7,13 @@ import os
 app = Flask(__name__)
 
 # Konfigurera databasen baserat på miljö
-if os.path.exists('/data'):  # Vi är på Render
-    db_path = os.path.join('/data', 'kaninkalender.db')
-else:  # Vi är lokalt
-    db_path = os.path.join(app.instance_path, 'kaninkalender.db')
+db_filename = 'kaninkalender.db'
+
+# Använd /data på Render, annars instance-mappen lokalt
+if os.path.exists('/data'):
+    db_path = os.path.join('/data', db_filename)
+else:
+    db_path = os.path.join(app.instance_path, db_filename)
     os.makedirs(app.instance_path, exist_ok=True)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
@@ -20,6 +23,12 @@ db = SQLAlchemy(app)
 
 # Hämta titel från miljövariabel eller använd default
 CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
+
+# Initiera databasen endast om filen saknas
+if not os.path.exists(db_path):
+    with app.app_context():
+        db.create_all()
+        print(f"✅ Databas skapades eftersom den inte fanns: {db_path}")
 
 class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)

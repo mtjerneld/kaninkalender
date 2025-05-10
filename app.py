@@ -4,29 +4,16 @@ from flask_migrate import Migrate
 from datetime import datetime, timedelta
 import json
 import os
+from dotenv import load_dotenv
 
-def ensure_db_directory():
-    """Säkerställ att databaskatalogen finns och har rätt behörigheter."""
-    if 'RENDER' in os.environ:
-        # På Render använder vi instance/
-        db_dir = os.path.join(os.path.dirname(__file__), 'instance')
-    else:
-        # Lokalt använder vi local_instance/ i projektets rot
-        db_dir = os.path.join(os.path.dirname(__file__), 'local_instance')
-    
-    os.makedirs(db_dir, exist_ok=True)
-    print(f"📁 Databaskatalog: {db_dir}")
-    return db_dir
+# Ladda miljövariabler från .env
+load_dotenv()
 
-# Skapa Flask-appen med korrekt instance_path
-app = Flask(__name__, instance_path=ensure_db_directory(), instance_relative_config=True)
+# Skapa Flask-appen
+app = Flask(__name__)
 
 # Konfigurera databasen
-db_filename = 'kaninkalender.db'
-db_path = os.path.join(app.instance_path, db_filename)
-print(f"📁 Databasen laddas från: {db_path}")
-
-app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
 
@@ -34,13 +21,12 @@ app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
-# Kör migrationer på Render
-if 'RENDER' in os.environ:
-    with app.app_context():
-        from flask_migrate import upgrade
-        print("🔄 Running migrations on Render...")
-        upgrade()
-        print("✅ Migrations completed!")
+# Kör migrationer
+with app.app_context():
+    from flask_migrate import upgrade
+    print("🔄 Running database migrations...")
+    upgrade()
+    print("✅ Migrations completed!")
 
 # Hämta titel från miljövariabel eller använd default
 CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
@@ -296,12 +282,4 @@ def check_reminders():
     return jsonify(reminders)
 
 if __name__ == "__main__":
-    # Kör bara detta när appen körs direkt, inte vid import
-    with app.app_context():
-        if not os.path.exists(db_path):
-            print(f"🆕 Första start – initierar databas: {db_path}")
-            from flask_migrate import upgrade
-            upgrade()
-        else:
-            print(f"✅ Databas finns redan: {db_path}")
     app.run(debug=True) 

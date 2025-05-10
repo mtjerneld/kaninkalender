@@ -7,12 +7,18 @@ import os
 
 app = Flask(__name__)
 
-# Säkerställ att instansmappen existerar
-os.makedirs(app.instance_path, exist_ok=True)
-
-# Konfigurera databasen
+# Konfigurera databasen baserat på miljö
 db_filename = 'kaninkalender.db'
-db_path = os.path.join(app.instance_path, db_filename)
+
+# Använd /data på Render, annars instance-mappen lokalt
+if os.environ.get("RENDER"):
+    db_path = os.path.join('/data', db_filename)
+    print("🌐 Running on Render, using /data for database")
+else:
+    os.makedirs(app.instance_path, exist_ok=True)
+    db_path = os.path.join(app.instance_path, db_filename)
+    print("💻 Running locally, using instance/ for database")
+
 print(f"📁 Databasen laddas från: {db_path}")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'

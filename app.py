@@ -11,6 +11,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
 db = SQLAlchemy(app)
 
+# Hämta titel från miljövariabel eller använd default
+CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
+
 class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
@@ -81,7 +84,7 @@ def create_future_tasks():
 def index():
     today = datetime.now().date()
     today_tasks = Task.query.filter_by(date=today).all()
-    return render_template('index.html', today_tasks=today_tasks)
+    return render_template('index.html', today_tasks=today_tasks, calendar_title=CALENDAR_TITLE)
 
 @app.route('/api/schedules', methods=['GET'])
 def get_schedules():

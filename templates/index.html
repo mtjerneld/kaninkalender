@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mabel och Kikis kalender</title>
+    <title>{{ calendar_title }}</title>
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
 </head>
 <body>
     <div class="container">
-        <h1>🐰 Mabel och Kikis kalender 🐰</h1>
+        <h1>🐰 {{ calendar_title }} 🐰</h1>
         
         <div id="login" class="login-section">
             <div class="login-box">

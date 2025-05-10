@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mabel och Kikis underhållsschema</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
+</head>
+<body>
+    <div class="container">
+        <h1>🐰 Mabel och Kikis underhållsschema 🐰</h1>
+        
+        <div id="login" class="login-section">
+            <div class="login-box">
+                <h3>Logga in</h3>
+                <div class="form-group">
+                    <input type="password" id="password" placeholder="Ange lösenord" class="password-input">
+                    <button onclick="checkPassword()" class="login-btn">Logga in</button>
+                </div>
+                <p id="login-error" class="error-message hidden">Felaktigt lösenord</p>
+            </div>
+        </div>
+
+        <div id="calendar-content" class="hidden">
+            <div class="task-list">
+                <h3>Dagens uppgifter</h3>
+                <div id="tasks">
+                    {% for task in today_tasks %}
+                    <div class="task {% if task.completed %}completed{% endif %}">
+                        <button onclick="toggleTask({{ task.id }}, 'completed')" class="task-btn">
+                            Aktivitet utförd
+                        </button>
+                        <span>{{ task.task_type }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div id="calendar"></div>
+
+            <div class="controls">
+                <button onclick="toggleScheduleEditor()" class="editor-btn">Redigera Schema</button>
+                <button onclick="logout()" class="logout-btn">Logga ut</button>
+            </div>
+
+            <div id="schedule-editor" class="schedule-editor hidden">
+                <h2>Redigera Schema</h2>
+                <div class="schedule-list" id="schedule-list"></div>
+                <button onclick="showAddScheduleForm()" class="add-schedule-btn">+ Lägg till ny aktivitet</button>
+            </div>
+
+            <div id="schedule-form" class="schedule-form hidden">
+                <h3 id="form-title">Ny aktivitet</h3>
+                <form onsubmit="saveSchedule(event)">
+                    <div class="form-group">
+                        <label for="schedule-title">Titel:</label>
+                        <input type="text" id="schedule-title" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Veckodagar:</label>
+                        <div class="weekday-checkboxes">
+                            <label><input type="checkbox" value="0"> Mån</label>
+                            <label><input type="checkbox" value="1"> Tis</label>
+                            <label><input type="checkbox" value="2"> Ons</label>
+                            <label><input type="checkbox" value="3"> Tor</label>
+                            <label><input type="checkbox" value="4"> Fre</label>
+                            <label><input type="checkbox" value="5"> Lör</label>
+                            <label><input type="checkbox" value="6"> Sön</label>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="schedule-active" checked>
+                            Aktiv
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label for="schedule-end-date">Slutdatum (valfritt):</label>
+                        <input type="date" id="schedule-end-date" 
+                               min="${formatDate(new Date())}"
+                               max="9999-12-31"
+                               pattern="\d{4}-\d{2}-\d{2}">
+                        <p class="form-help">Lämna tomt för att schemat ska fortsätta utan slutdatum</p>
+                    </div>
+                    <div class="form-buttons">
+                        <button type="submit">Spara</button>
+                        <button type="button" onclick="hideScheduleForm()">Avbryt</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let tasks = [];
+        let calendar;
+        let schedules = [];
+        let editingScheduleId = null;
+
+        // Verifierad SHA-256 implementation
+        async function sha256(message) {
+            const msgBuffer = new TextEncoder().encode(message.trim());
+            const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+        }
+
+        async function checkPassword() {
+            try {
+                const password = document.getElementById('password').value;
+                const hashedPassword = await sha256(password);
+                const correctHash = '696eea8492902aa04d932987107d4e135022e859a756500448e754b4c3197671';
+                
+                if (hashedPassword === correctHash) {
+                    // Dölj hela login-sektionen
+                    document.getElementById('login').style.display = 'none';
+                    document.getElementById('calendar-content').classList.remove('hidden');
+                    sessionStorage.setItem('isLoggedIn', 'true');
+                    
+                    // Initiera kalendern direkt efter inloggning
+                    const calendarEl = document.getElementById('calendar');
+                    calendar = new FullCalendar.Calendar(calendarEl, {
+                        initialView: 'dayGridMonth',
+                        locale: 'sv',
+                        firstDay: 1,
+                        headerToolbar: {
+                            left: 'prev,next today',
+                            center: 'title',
+                            right: ''
+                        },
+                        buttonText: {
+                            today: 'Idag'
+                        },
+                        eventClick: function(info) {
+                            showTaskPopup(info.event);
+                        },
+                        eventDidMount: function(info) {
+                            if (info.event.extendedProps.completed) {
+                                info.el.classList.add('completed');
+                            }
+                            if (info.event.extendedProps.missed) {
+                                info.el.classList.add('missed');
+                            }
+                        },
+                        datesSet: function(info) {
+                            loadTasks(info.start, info.end);
+                        }
+                    });
+                    calendar.render();
+                    loadTasks();
+                    loadSchedules();
+                } else {
+                    document.getElementById('login-error').classList.remove('hidden');
+                    document.getElementById('password').value = '';
+                }
+            } catch (error) {
+                document.getElementById('login-error').textContent = 'Ett fel uppstod vid inloggning';
+                document.getElementById('login-error').classList.remove('hidden');
+            }
+        }
+
+        // Lägg till Enter-tangent stöd för lösenordsfältet
+        document.getElementById('password').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                checkPassword();
+            }
+        });
+
+        document.addEventListener('DOMContentLoaded', function() {
+            if (sessionStorage.getItem('isLoggedIn') === 'true') {
+                // Dölj hela login-sektionen
+                document.getElementById('login').style.display = 'none';
+                document.getElementById('calendar-content').classList.remove('hidden');
+                
+                // Initiera kalendern vid sidladdning om användaren är inloggad
+                const calendarEl = document.getElementById('calendar');
+                calendar = new FullCalendar.Calendar(calendarEl, {
+                    initialView: 'dayGridMonth',
+                    locale: 'sv',
+                    firstDay: 1,
+                    headerToolbar: {
+                        left: 'prev,next today',
+                        center: 'title',
+                        right: ''
+                    },
+                    buttonText: {
+                        today: 'Idag'
+                    },
+                    eventClick: function(info) {
+                        showTaskPopup(info.event);
+                    },
+                    eventDidMount: function(info) {
+                        if (info.event.extendedProps.completed) {
+                            info.el.classList.add('completed');
+                        }
+                        if (info.event.extendedProps.missed) {
+                            info.el.classList.add('missed');
+                        }
+                    },
+                    datesSet: function(info) {
+                        loadTasks(info.start, info.end);
+                    }
+                });
+                calendar.render();
+                loadTasks();
+                loadSchedules();
+            }
+        });
+
+        function formatDate(date) {
+            return date.toISOString().split('T')[0];
+        }
+
+        function showTaskPopup(event) {
+            const taskId = event.extendedProps.taskId;
+            const isCompleted = event.extendedProps.completed;
+            const isMissed = event.extendedProps.missed;
+            const originalDate = event.start;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const isPastOrToday = originalDate <= today;
+            
+            // Skapa popup-innehåll
+            const popupContent = document.createElement('div');
+            popupContent.className = 'task-popup';
+            popupContent.innerHTML = `
+                <div class="popup-header">
+                    <h3>${event.title}</h3>
+                    <span class="rabbit-icon">🐰</span>
+                </div>
+                <p>Planerat datum: ${originalDate.toLocaleDateString('sv-SE')}</p>
+                ${isPastOrToday ? `
+                    <div class="task-status">
+                        <label>
+                            <input type="checkbox" ${isCompleted ? 'checked' : ''} 
+                                   onchange="toggleTask(${taskId}, 'completed')">
+                            Markera som utförd
+                        </label>
+                        <label>
+                            <input type="checkbox" ${isMissed ? 'checked' : ''} 
+                                   onchange="toggleTask(${taskId}, 'missed')">
+                            Markera som missad
+                        </label>
+                    </div>
+                ` : `
+                    <p class="future-task-message">Framtida aktiviteter kan inte markeras som utförda eller missade.</p>
+                `}
+                <div class="reschedule-section">
+                    <h4>Flytta aktivitet</h4>
+                    <p>Om du flyttade denna aktivitet, välj när den utfördes istället:</p>
+                    <input type="date" id="new-date" 
+                           min="${formatDate(new Date(originalDate.getTime() - 7 * 24 * 60 * 60 * 1000))}"
+                           max="${formatDate(new Date(originalDate.getTime() + 7 * 24 * 60 * 60 * 1000))}"
+                           value="${formatDate(originalDate)}">
+                    <button onclick="rescheduleTask(${taskId})" class="reschedule-btn">
+                        Flytta aktivitet
+                    </button>
+                </div>
+            `;
+            
+            // Visa popup
+            const popup = document.createElement('div');
+            popup.className = 'popup-overlay';
+            popup.appendChild(popupContent);
+            document.body.appendChild(popup);
+            
+            // Stäng popup när man klickar utanför
+            popup.addEventListener('click', function(e) {
+                if (e.target === popup) {
+                    document.body.removeChild(popup);
+                }
+            });
+        }
+
+        async function loadSchedules() {
+            const response = await fetch('/api/schedules');
+            schedules = await response.json();
+            updateScheduleList();
+        }
+
+        function updateScheduleList() {
+            const scheduleList = document.getElementById('schedule-list');
+            scheduleList.innerHTML = schedules.map(schedule => `
+                <div class="schedule-item">
+                    <div class="schedule-info">
+                        <h4>${schedule.title}</h4>
+                        <p>Veckodagar: ${schedule.weekdays.map(d => ['Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör', 'Sön'][d]).join(', ')}</p>
+                        <p>Status: ${schedule.active ? 'Aktiv' : 'Inaktiv'}</p>
+                        ${schedule.end_date ? `<p>Slutdatum: ${new Date(schedule.end_date).toLocaleDateString('sv-SE')}</p>` : ''}
+                    </div>
+                    <div class="schedule-actions">
+                        <button onclick="editSchedule(${schedule.id})">Redigera</button>
+                        <button onclick="deleteSchedule(${schedule.id})" class="delete-btn">Ta bort</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function toggleScheduleEditor() {
+            const editor = document.getElementById('schedule-editor');
+            editor.classList.toggle('hidden');
+        }
+
+        function showAddScheduleForm() {
+            editingScheduleId = null;
+            document.getElementById('form-title').textContent = 'Ny aktivitet';
+            document.getElementById('schedule-title').value = '';
+            document.getElementById('schedule-active').checked = true;
+            document.getElementById('schedule-end-date').value = '';
+            document.querySelectorAll('.weekday-checkboxes input').forEach(cb => cb.checked = false);
+            document.getElementById('schedule-form').classList.remove('hidden');
+        }
+
+        function hideScheduleForm() {
+            document.getElementById('schedule-form').classList.add('hidden');
+        }
+
+        async function saveSchedule(event) {
+            event.preventDefault();
+            
+            const title = document.getElementById('schedule-title').value;
+            const weekdays = Array.from(document.querySelectorAll('.weekday-checkboxes input:checked'))
+                .map(cb => parseInt(cb.value));
+            const active = document.getElementById('schedule-active').checked;
+            const endDate = document.getElementById('schedule-end-date').value;
+
+            const scheduleData = {
+                title,
+                weekdays,
+                active,
+                end_date: endDate || null
+            };
+
+            const url = editingScheduleId 
+                ? `/api/schedules/${editingScheduleId}`
+                : '/api/schedules';
+            
+            const method = editingScheduleId ? 'PUT' : 'POST';
+
+            const response = await fetch(url, {
+                method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(scheduleData)
+            });
+
+            if (response.ok) {
+                await loadSchedules();
+                hideScheduleForm();
+                // Uppdatera kalendern
+                await loadTasks();
+            }
+        }
+
+        function editSchedule(scheduleId) {
+            const schedule = schedules.find(s => s.id === scheduleId);
+            if (!schedule) return;
+
+            editingScheduleId = scheduleId;
+            document.getElementById('form-title').textContent = 'Redigera aktivitet';
+            document.getElementById('schedule-title').value = schedule.title;
+            document.getElementById('schedule-active').checked = schedule.active;
+            document.getElementById('schedule-end-date').value = schedule.end_date || '';
+            
+            document.querySelectorAll('.weekday-checkboxes input').forEach(cb => {
+                cb.checked = schedule.weekdays.includes(parseInt(cb.value));
+            });
+
+            document.getElementById('schedule-form').classList.remove('hidden');
+        }
+
+        async function deleteSchedule(scheduleId) {
+            if (!confirm('Är du säker på att du vill ta bort denna aktivitet?')) return;
+
+            const response = await fetch(`/api/schedules/${scheduleId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                await loadSchedules();
+                // Uppdatera kalendern
+                await loadTasks();
+            }
+        }
+
+        async function rescheduleTask(taskId) {
+            const newDate = document.getElementById('new-date').value;
+            if (!newDate) return;
+
+            const response = await fetch(`/api/tasks/${taskId}/reschedule`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ new_date: newDate })
+            });
+            
+            if (response.ok) {
+                loadTasks();
+                // Stäng popup
+                const popup = document.querySelector('.popup-overlay');
+                if (popup) {
+                    document.body.removeChild(popup);
+                }
+            }
+        }
+
+        async function loadTasks(startDate, endDate) {
+            if (!startDate) {
+                startDate = calendar.view.currentStart;
+            }
+            if (!endDate) {
+                endDate = calendar.view.currentEnd;
+            }
+            
+            console.log('Loading tasks from', startDate, 'to', endDate);
+            
+            const response = await fetch(`/api/tasks?start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}`);
+            tasks = await response.json();
+            
+            // Uppdatera kalendern med uppgifterna
+            calendar.removeAllEvents();
+            tasks.forEach(task => {
+                calendar.addEvent({
+                    title: task.task_type,
+                    date: task.date,
+                    extendedProps: {
+                        taskId: task.id,
+                        completed: task.completed,
+                        missed: task.missed
+                    }
+                });
+            });
+        }
+
+        async function toggleTask(taskId, status) {
+            const response = await fetch(`/api/tasks/${taskId}/toggle`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ status: status })
+            });
+            
+            if (response.ok) {
+                loadTasks();
+                // Stäng popup
+                const popup = document.querySelector('.popup-overlay');
+                if (popup) {
+                    document.body.removeChild(popup);
+                }
+            }
+        }
+
+        async function logout() {
+            // Ta bort inloggningsstatus
+            sessionStorage.removeItem('isLoggedIn');
+            
+            // Ta bort kalendern
+            if (calendar) {
+                calendar.destroy();
+                calendar = null;
+            }
+            
+            // Visa login-rutan och dölj kalenderinnehållet
+            document.getElementById('login').style.display = 'block';
+            document.getElementById('calendar-content').classList.add('hidden');
+            
+            // Rensa lösenordsfältet och felmeddelanden
+            document.getElementById('password').value = '';
+            document.getElementById('login-error').classList.add('hidden');
+        }
+    </script>
+</body>
+</html> 

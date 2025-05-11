@@ -97,24 +97,16 @@ db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
 def run_migrations():
-    with app.app_context():
-        from flask_migrate import upgrade
-        print("🔄 Running database migrations...")
-        try:
-            # Försök köra migreringar
-            upgrade()
-            print("✅ Migrations completed successfully!")
-        except Exception as e:
-            print(f"❌ Error during migrations: {str(e)}")
-            # Om det är ett problem med kolumnen description, försök lägga till den manuellt
-            if "column task.description does not exist" in str(e):
-                print("Attempting to add description column manually...")
-                try:
-                    db.engine.execute('ALTER TABLE task ADD COLUMN description TEXT')
-                    print("✅ Added description column manually")
-                except Exception as e2:
-                    print(f"❌ Failed to add column manually: {str(e2)}")
-            raise
+    from flask_migrate import upgrade
+    import traceback
+    print("🔄 Running database migrations...")
+    try:
+        upgrade()
+        print("✅ Migrations completed successfully!")
+    except Exception as e:
+        print("❌ Error during migrations:")
+        traceback.print_exc()
+        raise
 
 # Hämta titel från miljövariabel eller använd default
 CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
@@ -517,9 +509,10 @@ def check_reminders():
     
     return jsonify(reminders)
 
-# Kör migrering automatiskt även vid gunicorn-uppstart i Render
+# Kör migreringar även när Render kör 'gunicorn app:app'
 if os.getenv('RENDER') == 'true' or os.getenv('FLASK_ENV') == 'production':
-    run_migrations()
+    with app.app_context():
+        run_migrations()
 
 if __name__ == "__main__":
     app.run(debug=True) 

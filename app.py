@@ -100,8 +100,12 @@ def run_migrations():
     with app.app_context():
         from flask_migrate import upgrade
         print("🔄 Running database migrations...")
-        upgrade()
-        print("✅ Migrations completed!")
+        try:
+            upgrade()
+            print("✅ Migrations completed successfully!")
+        except Exception as e:
+            print(f"❌ Error during migrations: {str(e)}")
+            raise
 
 # Hämta titel från miljövariabel eller använd default
 CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
@@ -505,6 +509,7 @@ def check_reminders():
     return jsonify(reminders)
 
 if __name__ == "__main__":
-    # Kör migreringar om du vill, annars kommentera bort raden nedan
-    # run_migrations()
+    # Kör migreringar i produktion eller om RENDER=true
+    if os.getenv('RENDER') == 'true' or os.getenv('FLASK_ENV') == 'production':
+        run_migrations()
     app.run(debug=True) 

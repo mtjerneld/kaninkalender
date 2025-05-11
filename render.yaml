@@ -19,6 +19,8 @@ services:
         sync: false
       - key: CALENDAR_TITLE
         value: Kaninkalendern
+      - key: RENDER
+        value: "true"
 
 databases:
   - name: kaninkalender-db

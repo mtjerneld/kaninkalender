@@ -517,8 +517,9 @@ def check_reminders():
     
     return jsonify(reminders)
 
+# Kör migrering automatiskt även vid gunicorn-uppstart i Render
+if os.getenv('RENDER') == 'true' or os.getenv('FLASK_ENV') == 'production':
+    run_migrations()
+
 if __name__ == "__main__":
-    # Kör migreringar i produktion eller om RENDER=true
-    if os.getenv('RENDER') == 'true' or os.getenv('FLASK_ENV') == 'production':
-        run_migrations()
     app.run(debug=True) 

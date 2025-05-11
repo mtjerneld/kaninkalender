@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, request, session
+from flask import Flask, render_template, jsonify, request, session, Blueprint, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from datetime import datetime, timedelta
@@ -8,18 +8,98 @@ from dotenv import load_dotenv
 from functools import wraps
 from hashlib import sha256
 import logging
+from flask_wtf.csrf import CSRFProtect, CSRFError
+import secrets  # Lägg till denna import överst
 
 # Ladda miljövariabler från .env
 load_dotenv()
 
 # Skapa Flask-appen
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY', 'default-secret-key')  # Lägg till en hemlig nyckel för sessions
-app.config['SESSION_COOKIE_SECURE'] = False  # Tillåt sessions över HTTP i utvecklingsmiljö
+
+# Säkerhetskonfiguration
+required_env_vars = ['SECRET_KEY', 'PASSWORD_HASH', 'API_KEY']
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+app.secret_key = os.getenv('SECRET_KEY')
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('FLASK_ENV') == 'production'  # True i produktion
 app.config['SESSION_COOKIE_HTTPONLY'] = True  # Skydda mot XSS
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Skydda mot CSRF
-app.config['SESSION_TYPE'] = 'filesystem'  # Använd filsystem för sessions
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)  # Sätt sessionens livstid till 7 dagar
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Balanserad säkerhet för kalender-app
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+
+# Aktivera CSRF-skydd
+csrf = CSRFProtect(app)
+
+# Skapa blueprint för API-nyckel-baserade endpoints
+api_bp = Blueprint('api', __name__, url_prefix='/api')
+csrf.exempt(api_bp)  # Undanta hela API-blueprinten från CSRF
+
+# Undanta login från CSRF-skydd
+csrf.exempt(app.route('/api/login'))
+
+def csrf_exempt(view):
+    """Dekorator för att undanta en vy från CSRF-skydd"""
+    csrf.exempt(view)
+    return view
+
+def csrf_optional_for_api_key(view):
+    if not hasattr(view, '_csrf_exempt'):
+        @wraps(view)
+        def wrapped_view(*args, **kwargs):
+            api_key = request.headers.get("X-API-Key")
+            if api_key and api_key == API_KEY:
+                # Direktundanta funktionen (görs en gång)
+                view._csrf_exempt = True
+            return view(*args, **kwargs)
+        return wrapped_view
+    return view
+
+# Hantera CSRF-fel
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    if request.path == '/api/login':
+        return jsonify({'error': 'Felaktigt lösenord'}), 401
+    return jsonify({'error': 'CSRF token missing or invalid'}), 400
+
+def generate_nonce():
+    """Generera en unik nonce för varje request"""
+    return secrets.token_hex(16)
+
+@app.before_request
+def before_request():
+    if not session.get('csrf_token'):
+        session['csrf_token'] = csrf._get_csrf_token()
+    
+    # Lägg till CSP header med nonce
+    nonce = generate_nonce()
+    session['script_nonce'] = nonce
+    
+    # Strikt CSP policy
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'nonce-{nonce}' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data:; "
+        "font-src 'self' data: https://cdn.jsdelivr.net; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    ).format(nonce=nonce)
+    
+    # Lägg till headers på response
+    response = make_response()
+    response.headers['Content-Security-Policy'] = csp
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    
+    # Returnera None för att fortsätta med request
+    return None
 
 # Konfigurera databasen
 database_url = os.getenv('DATABASE_URL')
@@ -36,9 +116,11 @@ API_KEY = os.getenv('API_KEY')
 # Lösenordshash från miljövariabel
 PASSWORD_HASH = os.getenv('PASSWORD_HASH', '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92')  # Default: "123456"
 
-# Konfigurera logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Konfigurera loggning
+logging.basicConfig(
+    level=logging.DEBUG if os.environ.get('FLASK_ENV') == 'development' else logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # Login attempts tracking
 login_attempts = {}
@@ -114,18 +196,18 @@ CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
 class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text, nullable=True)  # Ny kolumn för beskrivning
+    description = db.Column(db.Text, nullable=True)
     weekdays = db.Column(db.String(100), nullable=False)  # Stored as JSON string
     active = db.Column(db.Boolean, default=True)
-    end_date = db.Column(db.Date, nullable=True)  # Slutdatum
-    start_date = db.Column(db.Date, nullable=True)  # Startdatum
+    end_date = db.Column(db.Date, nullable=True)
+    start_date = db.Column(db.Date, nullable=True)
 
     def to_dict(self):
         return {
             'id': self.id,
             'title': self.title,
-            'description': self.description,  # Lägg till beskrivning i JSON-svaret
-            'weekdays': json.loads(self.weekdays),
+            'description': self.description,
+            'weekdays': json.loads(self.weekdays),  # Konvertera från JSON-sträng till lista
             'active': self.active,
             'end_date': self.end_date.isoformat() if self.end_date else None,
             'start_date': self.start_date.isoformat() if self.start_date else None
@@ -151,54 +233,63 @@ def create_future_tasks():
     
     # För varje schema, skapa uppgifter fram till dess slutdatum
     for schedule in schedules:
-        # Bestäm hur långt fram vi ska skapa uppgifter
-        if schedule.end_date:
-            end_date = min(schedule.end_date, max_end_date)
-        else:
-            end_date = today + timedelta(days=60)
-        
-        # Bestäm startdatum
-        if schedule.start_date:
-            start_date = schedule.start_date
-        else:
-            start_date = today
-        
-        # Skapa uppgifter för varje dag från startdatum till slutdatumet
-        current_date = max(today, start_date)
-        weekdays = json.loads(schedule.weekdays)
-        tasks_for_schedule = 0
-        
-        while current_date <= end_date:
-            weekday = current_date.weekday()
+        try:
+            # Bestäm hur långt fram vi ska skapa uppgifter
+            if schedule.end_date:
+                end_date = min(schedule.end_date, max_end_date)
+            else:
+                end_date = today + timedelta(days=60)
             
-            if weekday in weekdays:
-                # Kontrollera om det redan finns en uppgift för detta datum och schema
-                existing_task = Task.query.filter_by(
-                    date=current_date,
-                    schedule_id=schedule.id
-                ).first()
+            # Bestäm startdatum
+            if schedule.start_date:
+                start_date = schedule.start_date
+            else:
+                start_date = today
+            
+            # Skapa uppgifter för varje dag från startdatum till slutdatumet
+            current_date = max(today, start_date)
+            weekdays = json.loads(schedule.weekdays) if isinstance(schedule.weekdays, str) else schedule.weekdays
+            tasks_for_schedule = 0
+            
+            while current_date <= end_date:
+                weekday = current_date.weekday()
                 
-                if not existing_task:
-                    all_tasks_to_create.append(Task(
+                if weekday in weekdays:
+                    # Kontrollera om det redan finns en uppgift för detta datum och schema
+                    existing_task = Task.query.filter_by(
                         date=current_date,
-                        task_type=schedule.title,
-                        description=schedule.description,  # Kopiera beskrivningen från schemat
-                        completed=False,
                         schedule_id=schedule.id
-                    ))
-                    tasks_for_schedule += 1
+                    ).first()
+                    
+                    if not existing_task:
+                        all_tasks_to_create.append(Task(
+                            date=current_date,
+                            task_type=schedule.title,
+                            description=schedule.description,
+                            completed=False,
+                            schedule_id=schedule.id
+                        ))
+                        tasks_for_schedule += 1
+                
+                current_date += timedelta(days=1)
             
-            current_date += timedelta(days=1)
-        
-        if tasks_for_schedule > 0:
-            print(f"Prepared {tasks_for_schedule} tasks for schedule '{schedule.title}'")
+            if tasks_for_schedule > 0:
+                logging.debug(f"Prepared {tasks_for_schedule} tasks for schedule '{schedule.title}'")
+                
+        except Exception as e:
+            logging.error(f"Fel vid skapande av uppgifter för schema {schedule.id}: {str(e)}")
+            continue
     
     # Skapa alla uppgifter i ett enda batch
     if all_tasks_to_create:
-        print(f"Creating {len(all_tasks_to_create)} tasks in bulk")
-        db.session.bulk_save_objects(all_tasks_to_create)
-        db.session.commit()
-        print("Bulk insert completed")
+        try:
+            logging.debug(f"Creating {len(all_tasks_to_create)} tasks in bulk")
+            db.session.bulk_save_objects(all_tasks_to_create)
+            db.session.commit()
+            logging.debug("Bulk insert completed")
+        except Exception as e:
+            logging.error(f"Fel vid bulk insert av uppgifter: {str(e)}")
+            db.session.rollback()
 
 @app.route('/')
 def index():
@@ -206,36 +297,44 @@ def index():
     today_tasks = Task.query.filter_by(date=today).all()
     return render_template('index.html', 
                          today_tasks=today_tasks, 
-                         calendar_title=CALENDAR_TITLE)
+                         calendar_title=CALENDAR_TITLE,
+                         csrf_token=session.get('csrf_token', csrf._get_csrf_token()),
+                         script_nonce=session.get('script_nonce', generate_nonce()))
 
 @app.route('/api/login', methods=['POST'])
+@csrf.exempt
 def login():
-    data = request.get_json()
-    password = data.get('password', '')
-    client_ip = get_client_ip()
-    
-    # Check if IP is blocked
-    if is_ip_blocked(client_ip):
-        remaining_time = (login_attempts[client_ip]['last_attempt'] + 
-                         timedelta(minutes=BLOCK_DURATION) - datetime.now())
-        seconds = int(remaining_time.total_seconds())
-        return jsonify({
-            'error': f'För många misslyckade inloggningsförsök. Försök igen om {seconds} sekunder.'
-        }), 429
+    try:
+        data = request.get_json()
+        password = data.get('password', '')
+        client_ip = get_client_ip()
+        
+        # Check if IP is blocked
+        if is_ip_blocked(client_ip):
+            remaining_time = (login_attempts[client_ip]['last_attempt'] + 
+                            timedelta(minutes=BLOCK_DURATION) - datetime.now())
+            seconds = int(remaining_time.total_seconds())
+            return jsonify({
+                'error': f'För många misslyckade inloggningsförsök. Försök igen om {seconds} sekunder.'
+            }), 429
 
-    # Hash the password
-    hashed_password = sha256(password.encode()).hexdigest()
+        # Hash the password
+        hashed_password = sha256(password.encode()).hexdigest()
 
-    if hashed_password == PASSWORD_HASH:
-        session.clear()  # Rensa eventuella gamla sessionsdata
-        session['is_logged_in'] = True
-        session.permanent = True  # Gör sessionen permanent
-        record_login_attempt(client_ip, True)
-        print("Session created:", dict(session))  # Debug-utskrift
-        return jsonify({'message': 'Login successful'})
-    else:
-        record_login_attempt(client_ip, False)
-        return jsonify({'error': 'Felaktigt lösenord'}), 401
+        if hashed_password == PASSWORD_HASH:
+            session.clear()
+            session['is_logged_in'] = True
+            session['login_time'] = datetime.now().isoformat()
+            session.permanent = True
+            record_login_attempt(client_ip, True)
+            logging.debug("Successful login from IP: %s", client_ip)  # Säker loggning
+            return jsonify({'message': 'Login successful'})
+        else:
+            record_login_attempt(client_ip, False)
+            logging.warning("Failed login attempt from IP: %s", client_ip)  # Säker loggning
+            return jsonify({'error': 'Felaktigt lösenord'}), 401
+    except Exception as e:
+        return log_error(e, "Fel vid inloggning")
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
@@ -246,9 +345,8 @@ def logout():
 
 @app.route('/api/check-session')
 def check_session():
-    print("Checking session:", dict(session))  # Debug-utskrift
     is_logged_in = session.get('is_logged_in', False)
-    print("Is logged in:", is_logged_in)  # Debug-utskrift
+    logging.debug("Session check - logged in: %s", is_logged_in)  # Säker loggning
     return jsonify({'logged_in': is_logged_in})
 
 @app.route('/api/schedules', methods=['GET'])
@@ -256,139 +354,138 @@ def check_session():
 def get_schedules():
     try:
         schedules = Schedule.query.all()
-        return jsonify([s.to_dict() for s in schedules])
+        # Returnera tom array om inga scheman finns
+        if not schedules:
+            return jsonify([])
+            
+        # Konvertera alla scheman till dictionaries
+        schedule_list = []
+        for schedule in schedules:
+            try:
+                schedule_dict = schedule.to_dict()
+                schedule_list.append(schedule_dict)
+            except Exception as e:
+                logging.error(f"Fel vid konvertering av schema {schedule.id}: {str(e)}")
+                continue
+                
+        return jsonify(schedule_list)
+        
     except Exception as e:
         logging.exception("Fel vid hämtning av scheman:")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Ett fel uppstod när scheman skulle hämtas'}), 500
 
-@app.route('/api/schedules', methods=['POST'])
+@api_bp.route('/schedules', methods=['POST'])
 @require_auth
+@csrf_optional_for_api_key
 def create_schedule():
-    data = request.json
-    title = data.get('title')
-    description = data.get('description')  # Hämta beskrivning
-    weekdays = data.get('weekdays', [])
-    start_date = data.get('start_date')
-    end_date = data.get('end_date')
-    active = data.get('active', True)
-
-    logger.info(f"Creating schedule with description: {description}")  # Logga beskrivningen
-
-    if not title or not weekdays or not start_date:
-        return jsonify({'error': 'Missing required fields'}), 400
-
     try:
-        # Validera datum
-        start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
-        max_end_date = datetime.now().date() + timedelta(days=365*10)  # 10 år fram i tiden
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Ingen data skickades'}), 400
+            
+        logging.debug("Received schedule data: %s", data)
         
+        # Validera weekdays
+        weekdays = data.get('weekdays', [])
+        if not isinstance(weekdays, list):
+            return jsonify({'error': 'weekdays måste vara en lista'}), 400
+        
+        # Konvertera till set för att ta bort duplicerade dagar och validera värden
+        try:
+            weekdays_set = {int(day) for day in weekdays}
+            if not all(0 <= day <= 6 for day in weekdays_set):
+                return jsonify({'error': 'weekdays måste vara värden mellan 0 och 6'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'weekdays måste innehålla giltiga nummer'}), 400
+        
+        # Validera start_date
+        start_date = data.get('start_date')
+        if start_date:
+            try:
+                start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if start_date < datetime.now().date():
+                    return jsonify({'error': 'start_date kan inte vara i det förflutna'}), 400
+            except ValueError:
+                return jsonify({'error': 'ogiltigt start_date format'}), 400
+        
+        # Validera end_date
+        end_date = data.get('end_date')
         if end_date:
-            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
-            if end_date_obj > max_end_date:
-                return jsonify({'error': 'Slutdatum kan inte vara mer än 10 år fram i tiden'}), 400
-        else:
-            end_date_obj = None
-
+            try:
+                end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+                if start_date and end_date < start_date:
+                    return jsonify({'error': 'end_date kan inte vara före start_date'}), 400
+            except ValueError:
+                return jsonify({'error': 'ogiltigt end_date format'}), 400
+        
         # Skapa schemat
         schedule = Schedule(
-            title=title,
-            description=description,  # Lägg till beskrivning
-            weekdays=json.dumps(weekdays),
-            start_date=start_date_obj,
-            end_date=end_date_obj,
-            active=active
+            title=data['title'],
+            description=data.get('description'),
+            weekdays=json.dumps(list(weekdays_set)),  # Konvertera till JSON-sträng
+            start_date=start_date,
+            end_date=end_date,
+            active=data.get('active', True)
         )
-        logger.info(f"Created schedule object with description: {schedule.description}")  # Logga beskrivningen
+        
         db.session.add(schedule)
-        db.session.flush()  # Flush för att få schedule.id
-
-        # Skapa alla uppgifter i ett enda batch
-        tasks_to_create = []
-        current_date = start_date_obj
-
-        while True:
-            if end_date_obj and current_date > end_date_obj:
-                break
-
-            weekday = current_date.weekday()
-            if weekday in weekdays:
-                tasks_to_create.append(Task(
-                    schedule_id=schedule.id,
-                    date=current_date,
-                    task_type=title,
-                    description=description,  # Kopiera beskrivningen från schemat
-                    completed=False,
-                    missed=False
-                ))
-
-            current_date += timedelta(days=1)
-            if not end_date and current_date > max_end_date:
-                break
-
-        if tasks_to_create:
-            db.session.bulk_save_objects(tasks_to_create)
-
         db.session.commit()
+        
+        # Skapa framtida uppgifter
+        create_future_tasks()
+        
         return jsonify(schedule.to_dict()), 201
-
-    except ValueError as e:
-        db.session.rollback()
-        return jsonify({'error': f'Ogiltigt datumformat: {str(e)}'}), 400
+        
+    except KeyError as e:
+        logging.error("Missing required field: %s", str(e))
+        return jsonify({'error': f'Saknar obligatoriskt fält: {str(e)}'}), 400
     except Exception as e:
-        db.session.rollback()
-        logger.error(f"Error creating schedule: {str(e)}")
+        logging.exception("Fel vid skapande av schema:")
         return jsonify({'error': 'Ett fel uppstod när schemat skulle skapas'}), 500
 
-@app.route('/api/schedules/<int:schedule_id>', methods=['PUT'])
+@api_bp.route('/schedules/<int:schedule_id>', methods=['PUT'])
 @require_auth
+@csrf_optional_for_api_key
 def update_schedule(schedule_id):
     schedule = Schedule.query.get_or_404(schedule_id)
-    data = request.json
-    logger.info(f"Updating schedule {schedule_id} with data: {data}")  # Logga inkommande data
+    data = request.get_json()
     
-    schedule.title = data['title']
-    schedule.description = data.get('description')  # Uppdatera beskrivning
-    logger.info(f"Updated schedule description to: {schedule.description}")  # Logga beskrivningen
-    
-    schedule.weekdays = json.dumps(data['weekdays'])
-    schedule.active = data['active']
-    
-    if data.get('end_date'):
+    # Validera weekdays
+    if 'weekdays' in data:
+        weekdays = data['weekdays']
+        if not isinstance(weekdays, list):
+            return jsonify({'error': 'weekdays måste vara en lista'}), 400
+        
+        # Konvertera till set för att ta bort duplicerade dagar och validera värden
         try:
-            schedule.end_date = datetime.strptime(data['end_date'], '%Y-%m-%d').date()
-            print(f"Updated schedule end date to: {schedule.end_date}")
-        except ValueError as e:
-            print(f"Error parsing end date: {e}")
-            return jsonify({'error': 'Invalid date format'}), 400
-    else:
-        schedule.end_date = None
-        print("Removed end date from schedule")
-    if data.get('start_date'):
-        try:
-            schedule.start_date = datetime.strptime(data['start_date'], '%Y-%m-%d').date()
-            print(f"Updated schedule start date to: {schedule.start_date}")
-        except ValueError as e:
-            print(f"Error parsing start date: {e}")
-            return jsonify({'error': 'Invalid date format'}), 400
-    else:
-        schedule.start_date = None
-        print("Removed start date from schedule")
+            weekdays_set = {int(day) for day in weekdays}
+            if not all(0 <= day <= 6 for day in weekdays_set):
+                return jsonify({'error': 'weekdays måste vara värden mellan 0 och 6'}), 400
+            schedule.weekdays = json.dumps(list(weekdays_set))  # Konvertera tillbaka till JSON-sträng för lagring
+        except (ValueError, TypeError):
+            return jsonify({'error': 'weekdays måste innehålla giltiga nummer'}), 400
+    
+    # Uppdatera övriga fält
+    if 'title' in data:
+        schedule.title = data['title']
+    if 'description' in data:
+        schedule.description = data['description']
+    if 'start_date' in data:
+        schedule.start_date = datetime.strptime(data['start_date'], '%Y-%m-%d').date()
+    if 'end_date' in data:
+        schedule.end_date = datetime.strptime(data['end_date'], '%Y-%m-%d').date() if data['end_date'] else None
+    if 'active' in data:
+        schedule.active = data['active']
     
     db.session.commit()
     
-    # Ta bort framtida uppgifter för detta schema
-    today = datetime.now().date()
-    Task.query.filter(
-        Task.schedule_id == schedule_id,
-        Task.date >= today
-    ).delete()
-    
-    # Skapa nya framtida uppgifter
-    create_future_tasks()
+    # Uppdatera tasks om schemat ändrats
+    if any(key in data for key in ['weekdays', 'start_date', 'end_date', 'active']):
+        update_schedule_tasks(schedule)
     
     return jsonify(schedule.to_dict())
 
-@app.route('/api/schedules/<int:schedule_id>', methods=['DELETE'])
+@api_bp.route('/schedules/<int:schedule_id>', methods=['DELETE'])
 @require_auth
 def delete_schedule(schedule_id):
     schedule = Schedule.query.get_or_404(schedule_id)
@@ -407,32 +504,35 @@ def delete_schedule(schedule_id):
 @app.route('/api/tasks', methods=['GET'])
 @require_auth
 def get_tasks():
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
-    
-    query = Task.query
-    
-    if start_date:
-        start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-        query = query.filter(Task.date >= start_date)
-    if end_date:
-        end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
-        query = query.filter(Task.date <= end_date)
-    
-    tasks = query.all()
-    print(f"Returning {len(tasks)} tasks from {start_date} to {end_date}")
-    
-    return jsonify([{
-        'id': task.id,
-        'date': task.date.strftime('%Y-%m-%d'),
-        'task_type': task.task_type,
-        'description': task.description,  # Lägg till beskrivning i API-svaret
-        'completed': task.completed,
-        'missed': task.missed,
-        'schedule_id': task.schedule_id
-    } for task in tasks])
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        query = Task.query
+        
+        if start_date:
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+            query = query.filter(Task.date >= start_date)
+        if end_date:
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+            query = query.filter(Task.date <= end_date)
+        
+        tasks = query.all()
+        logging.debug("Retrieved %d tasks from %s to %s", len(tasks), start_date, end_date)  # Säker loggning
+        
+        return jsonify([{
+            'id': task.id,
+            'date': task.date.strftime('%Y-%m-%d'),
+            'task_type': task.task_type,
+            'description': task.description,
+            'completed': task.completed,
+            'missed': task.missed,
+            'schedule_id': task.schedule_id
+        } for task in tasks])
+    except Exception as e:
+        return log_error(e, "Fel vid hämtning av uppgifter")
 
-@app.route('/api/tasks/<int:task_id>/toggle', methods=['POST'])
+@api_bp.route('/tasks/<int:task_id>/toggle', methods=['POST'])
 @require_auth
 def toggle_task(task_id):
     task = Task.query.get_or_404(task_id)
@@ -457,7 +557,7 @@ def toggle_task(task_id):
         'missed': task.missed
     })
 
-@app.route('/api/tasks/<int:task_id>/reschedule', methods=['POST'])
+@api_bp.route('/tasks/<int:task_id>/reschedule', methods=['POST'])
 @require_auth
 def reschedule_task(task_id):
     task = Task.query.get_or_404(task_id)
@@ -478,7 +578,7 @@ def reschedule_task(task_id):
         'schedule_id': task.schedule_id
     })
 
-@app.route('/api/tasks/<int:task_id>/missed', methods=['POST'])
+@api_bp.route('/tasks/<int:task_id>/missed', methods=['POST'])
 @require_auth
 def mark_task_missed(task_id):
     task = Task.query.get_or_404(task_id)
@@ -509,10 +609,21 @@ def check_reminders():
     
     return jsonify(reminders)
 
+# Registrera blueprinten
+app.register_blueprint(api_bp)
+
 # Kör migreringar även när Render kör 'gunicorn app:app'
 if os.getenv('RENDER') == 'true' or os.getenv('FLASK_ENV') == 'production':
     with app.app_context():
         run_migrations()
+
+def log_error(error, message="Ett fel uppstod"):
+    """Loggar fel internt men returnerar ett säkert meddelande till användaren"""
+    if os.environ.get('FLASK_ENV') == 'development':
+        logging.error(f"Detaljerat fel: {str(error)}")
+    else:
+        logging.error(message)
+    return message
 
 if __name__ == "__main__":
     app.run(debug=True) 

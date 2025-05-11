@@ -237,8 +237,14 @@ h1 {
     border-color: var(--accent-color) !important;
 }
 
-.fc .fc-daygrid-day.fc-day-today {
-    background-color: var(--completed-bg) !important;
+/* Custom styling for today's date */
+.fc-day-today .fc-daygrid-day-frame {
+    background-color: #fff3e0 !important;
+}
+
+.fc-day-today .fc-daygrid-day-number {
+    font-weight: bold;
+    color: #e65100;
 }
 
 .fc-col-header-cell {
@@ -350,8 +356,9 @@ h1 {
 
 .schedule-editor h2 {
     color: var(--primary-color);
-    margin-bottom: 20px;
+    margin-bottom: 15px;
     text-align: center;
+    font-size: 1.3em;
 }
 
 .schedule-list {
@@ -586,4 +593,31 @@ h1 {
     border-radius: 8px;
     margin: 10px 0;
     text-align: center;
+}
+
+.fc-today-highlight {
+    background-color: #fff3e0 !important;
+}
+
+.fc-today-highlight .fc-daygrid-day-frame {
+    background-color: #fff3e0 !important;
+}
+
+.fc-today-highlight .fc-daygrid-day-number {
+    font-weight: bold;
+    color: #e65100;
+}
+
+.add-schedule-btn {
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 1.1em;
+    padding: 10px;
+    cursor: pointer;
+    transition: color 0.3s ease;
+}
+
+.add-schedule-btn:hover {
+    color: #333;
 } 

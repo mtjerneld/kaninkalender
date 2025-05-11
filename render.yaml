@@ -11,9 +11,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.9.0
       - key: DATABASE_URL
-        fromDatabase:
-          name: kaninkalender-db
-          property: connectionString
+        sync: false
       - key: SECRET_KEY
         generateValue: true
       - key: PASSWORD_HASH
@@ -21,10 +19,4 @@ services:
       - key: CALENDAR_TITLE
         value: Kaninkalendern
       - key: RENDER
-        value: "true"
-
-databases:
-  - name: kaninkalender-db
-    databaseName: kaninkalender
-    user: kaninkalender
-    plan: free 
+        value: "true" 

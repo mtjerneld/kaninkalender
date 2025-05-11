@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>{{ calendar_title }}</title>
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script nonce="{{ script_nonce }}" src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
+    <script nonce="{{ script_nonce }}" src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -53,7 +54,9 @@
             <div id="schedule-editor" class="schedule-editor hidden">
                 <h2>Redigera Schema</h2>
                 <div class="schedule-list" id="schedule-list"></div>
-                <button onclick="showAddScheduleForm()" class="add-schedule-btn">+ Lägg till ny aktivitet</button>
+                <div class="schedule-actions">
+                    <button onclick="showAddScheduleForm()" class="add-schedule-btn">+ Lägg till ny aktivitet</button>
+                </div>
             </div>
 
             <div id="schedule-form" class="schedule-form hidden">
@@ -230,7 +233,7 @@
         </div>
     </div>
 
-    <script>
+    <script nonce="{{ script_nonce }}">
         let tasks = [];
         let calendar;
         let schedules = [];
@@ -268,6 +271,21 @@
             calendar.render();
         }
 
+        function getCsrfToken() {
+            return document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        }
+
+        function fetchWithCsrf(url, options = {}) {
+            const defaultOptions = {
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                }
+            };
+            return fetch(url, { ...defaultOptions, ...options });
+        }
+
         async function checkPassword() {
             const password = document.getElementById('password').value;
             const loginError = document.getElementById('login-error');
@@ -279,9 +297,10 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
                     },
-                    credentials: 'include',
-                    body: JSON.stringify({ password: password })
+                    body: JSON.stringify({ password }),
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -367,6 +386,15 @@
             return date.toISOString().split('T')[0];
         }
 
+        function escapeHtml(unsafe) {
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
         function showTaskPopup(event) {
             const taskId = event.extendedProps.taskId;
             const isCompleted = event.extendedProps.completed;
@@ -381,10 +409,10 @@
             popupContent.className = 'task-popup';
             popupContent.innerHTML = `
                 <div class="popup-header">
-                    <h3>${event.title}</h3>
+                    <h3>${escapeHtml(event.title)}</h3>
                     <span class="rabbit-icon">🐰</span>
                 </div>
-                ${description ? `<p class="task-description">${description}</p>` : ''}
+                ${description ? `<p class="task-description">${escapeHtml(description)}</p>` : ''}
                 <p>Planerat datum: ${event.start.toLocaleDateString('sv-SE')}</p>
                 ${isPastOrToday ? `
                     <div class="task-status">
@@ -408,7 +436,7 @@
                     <input type="date" id="new-date" 
                            min="${formatDate(new Date(event.start.getTime() - 7 * 24 * 60 * 60 * 1000))}"
                            max="${formatDate(new Date(event.start.getTime() + 7 * 24 * 60 * 60 * 1000))}"
-                           value="${formatDate(event.start)}">
+                           value="${event.startStr}">
                     <button onclick="rescheduleTask(${taskId})" class="reschedule-btn">
                         Flytta aktivitet
                     </button>
@@ -429,14 +457,20 @@
 
         async function loadSchedules() {
             try {
-                const response = await fetch('/api/schedules', {
-                    credentials: 'include'
-                });
-                schedules = await response.json();
+                const response = await fetchWithCsrf('/api/schedules');
+                if (!response.ok) {
+                    throw new Error('Kunde inte hämta scheman');
+                }
+                const data = await response.json();
+                
+                // Säkerställ att schedules är en array
+                schedules = Array.isArray(data) ? data : [];
+                
                 displaySchedules();
             } catch (error) {
                 console.error('Error:', error);
-                alert('Ett fel uppstod vid hämtning av scheman');
+                const container = document.getElementById('schedule-list');
+                container.innerHTML = '<p class="error-message">Ett fel uppstod vid hämtning av scheman</p>';
             }
         }
 
@@ -444,20 +478,36 @@
             const container = document.getElementById('schedule-list');
             container.innerHTML = '';
             
+            if (!Array.isArray(schedules)) {
+                container.innerHTML = '<p class="error-message">Ogiltigt format på scheman</p>';
+                return;
+            }
+            
+            if (schedules.length === 0) {
+                container.innerHTML = `
+                    <div class="no-schedules">
+                        <p>Inga scheman hittades</p>
+                    </div>
+                `;
+                return;
+            }
+            
             schedules.forEach(schedule => {
                 const scheduleElement = document.createElement('div');
                 scheduleElement.className = 'schedule-item';
                 const weekdays = ['Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör', 'Sön'];
-                const scheduleDays = schedule.weekdays.map(day => weekdays[day]).join(', ');
+                const scheduleDays = Array.isArray(schedule.weekdays) 
+                    ? schedule.weekdays.map(day => weekdays[day]).join(', ')
+                    : 'Inga dagar valda';
                 
                 scheduleElement.innerHTML = `
                     <div class="schedule-info">
-                        <h4>${schedule.title}</h4>
-                        ${schedule.description ? `<p class="schedule-description">${schedule.description}</p>` : ''}
-                        <p>Dagar: ${scheduleDays}</p>
+                        <h4>${escapeHtml(schedule.title)}</h4>
+                        ${schedule.description ? `<p class="schedule-description">${escapeHtml(schedule.description)}</p>` : ''}
+                        <p>Dagar: ${escapeHtml(scheduleDays)}</p>
                         <p>Status: ${schedule.active ? 'Aktiv' : 'Inaktiv'}</p>
-                        ${schedule.start_date ? `<p>Startdatum: ${schedule.start_date}</p>` : ''}
-                        ${schedule.end_date ? `<p>Slutdatum: ${schedule.end_date}</p>` : ''}
+                        ${schedule.start_date ? `<p>Startdatum: ${escapeHtml(schedule.start_date)}</p>` : ''}
+                        ${schedule.end_date ? `<p>Slutdatum: ${escapeHtml(schedule.end_date)}</p>` : ''}
                     </div>
                     <div class="schedule-actions">
                         <button onclick="editSchedule(${schedule.id})">Redigera</button>
@@ -507,12 +557,8 @@
             };
 
             try {
-                const response = await fetch('/api/schedules', {
+                const response = await fetchWithCsrf('/api/schedules', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    credentials: 'include',
                     body: JSON.stringify(scheduleData)
                 });
 
@@ -581,12 +627,8 @@
             };
 
             try {
-                const response = await fetch(`/api/schedules/${editingScheduleId}`, {
+                const response = await fetchWithCsrf(`/api/schedules/${editingScheduleId}`, {
                     method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    credentials: 'include',
                     body: JSON.stringify(scheduleData)
                 });
 
@@ -613,9 +655,8 @@
             }
 
             try {
-                const response = await fetch(`/api/schedules/${scheduleId}`, {
-                    method: 'DELETE',
-                    credentials: 'include'
+                const response = await fetchWithCsrf(`/api/schedules/${scheduleId}`, {
+                    method: 'DELETE'
                 });
 
                 if (response.ok) {
@@ -635,21 +676,22 @@
             const newDate = document.getElementById('new-date').value;
             if (!newDate) return;
 
-            const response = await fetch(`/api/tasks/${taskId}/reschedule`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                credentials: 'include',
-                body: JSON.stringify({ new_date: newDate })
-            });
-            
-            if (response.ok) {
-                loadTasks();
-                const popup = document.querySelector('.popup-overlay');
-                if (popup) {
-                    document.body.removeChild(popup);
+            try {
+                const response = await fetchWithCsrf(`/api/tasks/${taskId}/reschedule`, {
+                    method: 'POST',
+                    body: JSON.stringify({ new_date: newDate })
+                });
+                
+                if (response.ok) {
+                    loadTasks();
+                    const popup = document.querySelector('.popup-overlay');
+                    if (popup) {
+                        document.body.removeChild(popup);
+                    }
                 }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ett fel uppstod när aktiviteten skulle flyttas');
             }
         }
 
@@ -662,9 +704,7 @@
             }
             
             try {
-                const response = await fetch(`/api/tasks?start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}`, {
-                    credentials: 'include'
-                });
+                const response = await fetchWithCsrf(`/api/tasks?start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}`);
                 if (!response.ok) {
                     throw new Error('Kunde inte hämta uppgifter');
                 }
@@ -699,52 +739,53 @@
         }
 
         async function toggleTask(taskId, status) {
-            const response = await fetch(`/api/tasks/${taskId}/toggle`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                credentials: 'include',
-                body: JSON.stringify({ status: status })
-            });
+            try {
+                const response = await fetchWithCsrf(`/api/tasks/${taskId}/toggle`, {
+                    method: 'POST',
+                    body: JSON.stringify({ status })
+                });
 
-            if (response.ok) {
-                const updatedTask = await response.json();
+                if (response.ok) {
+                    const updatedTask = await response.json();
 
-                // Hitta och uppdatera DOM-elementet
-                const taskElement = document.querySelector(`[data-task-id="${taskId}"]`);
-                if (taskElement) {
-                    // Toggle completed-klassen på task-elementet
-                    taskElement.classList.toggle('completed', updatedTask.completed);
-                    taskElement.classList.toggle('missed', updatedTask.missed);
-                    
-                    // Toggle completed-klassen på knappen
-                    const button = taskElement.querySelector('.task-btn');
-                    if (button) {
-                        button.classList.toggle('completed', updatedTask.completed);
+                    // Hitta och uppdatera DOM-elementet
+                    const taskElement = document.querySelector(`[data-task-id="${taskId}"]`);
+                    if (taskElement) {
+                        // Toggle completed-klassen på task-elementet
+                        taskElement.classList.toggle('completed', updatedTask.completed);
+                        taskElement.classList.toggle('missed', updatedTask.missed);
+                        
+                        // Toggle completed-klassen på knappen
+                        const button = taskElement.querySelector('.task-btn');
+                        if (button) {
+                            button.classList.toggle('completed', updatedTask.completed);
+                        }
+                        
+                        // Toggle completed-klassen på span-elementet
+                        const span = taskElement.querySelector('span');
+                        if (span) {
+                            span.classList.toggle('completed', updatedTask.completed);
+                        }
                     }
+
+                    // Uppdatera kalendern
+                    await loadTasks(calendar.view.currentStart, calendar.view.currentEnd);
                     
-                    // Toggle completed-klassen på span-elementet
-                    const span = taskElement.querySelector('span');
-                    if (span) {
-                        span.classList.toggle('completed', updatedTask.completed);
+                    // Stäng popup om den finns
+                    const popup = document.querySelector('.popup-overlay');
+                    if (popup) {
+                        document.body.removeChild(popup);
                     }
                 }
-
-                // Uppdatera kalendern
-                await loadTasks(calendar.view.currentStart, calendar.view.currentEnd);
-                
-                // Stäng popup om den finns
-                const popup = document.querySelector('.popup-overlay');
-                if (popup) {
-                    document.body.removeChild(popup);
-                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ett fel uppstod när aktiviteten skulle uppdateras');
             }
         }
 
         async function loadTodayTasks() {
             try {
-                const response = await fetch('/api/tasks/today');
+                const response = await fetchWithCsrf('/api/tasks/today');
                 if (!response.ok) {
                     throw new Error('Kunde inte hämta dagens uppgifter');
                 }
@@ -772,9 +813,8 @@
 
         async function logout() {
             try {
-                await fetch('/api/logout', {
-                    method: 'POST',
-                    credentials: 'include'  // Lägg till credentials
+                const response = await fetchWithCsrf('/api/logout', {
+                    method: 'POST'
                 });
                 
                 document.getElementById('login').style.display = 'block';
@@ -805,12 +845,8 @@
             }
 
             try {
-                const response = await fetch('/api/schedules', {
+                const response = await fetchWithCsrf('/api/schedules', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    credentials: 'include',
                     body: JSON.stringify({
                         title: name,
                         description,

@@ -101,10 +101,19 @@ def run_migrations():
         from flask_migrate import upgrade
         print("🔄 Running database migrations...")
         try:
+            # Försök köra migreringar
             upgrade()
             print("✅ Migrations completed successfully!")
         except Exception as e:
             print(f"❌ Error during migrations: {str(e)}")
+            # Om det är ett problem med kolumnen description, försök lägga till den manuellt
+            if "column task.description does not exist" in str(e):
+                print("Attempting to add description column manually...")
+                try:
+                    db.engine.execute('ALTER TABLE task ADD COLUMN description TEXT')
+                    print("✅ Added description column manually")
+                except Exception as e2:
+                    print(f"❌ Failed to add column manually: {str(e2)}")
             raise
 
 # Hämta titel från miljövariabel eller använd default

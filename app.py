@@ -15,6 +15,11 @@ load_dotenv()
 # Skapa Flask-appen
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'default-secret-key')  # Lägg till en hemlig nyckel för sessions
+app.config['SESSION_COOKIE_SECURE'] = False  # Tillåt sessions över HTTP i utvecklingsmiljö
+app.config['SESSION_COOKIE_HTTPONLY'] = True  # Skydda mot XSS
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Skydda mot CSRF
+app.config['SESSION_TYPE'] = 'filesystem'  # Använd filsystem för sessions
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)  # Sätt sessionens livstid till 7 dagar
 
 # Konfigurera databasen
 database_url = os.getenv('DATABASE_URL')
@@ -71,21 +76,32 @@ def record_login_attempt(ip, success):
 def require_auth(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get('is_logged_in'):
-            return jsonify({"error": "Unauthorized"}), 401
-        return f(*args, **kwargs)
+        # Tillåt API-nyckel som alternativ till session
+        api_key = request.headers.get('X-API-Key')
+        if API_KEY and api_key == API_KEY:
+            print("Authenticated via API key")  # Debug-utskrift
+            return f(*args, **kwargs)
+
+        # Alternativt: kontrollera session
+        is_logged_in = session.get('is_logged_in', False)
+        if is_logged_in:
+            print("Authenticated via session")  # Debug-utskrift
+            return f(*args, **kwargs)
+
+        print("Authentication failed - no valid API key or session")  # Debug-utskrift
+        return jsonify({"error": "Unauthorized"}), 401
     return decorated_function
 
 # Initiera databasen och migrations
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
-# Kör migrationer
-with app.app_context():
-    from flask_migrate import upgrade
-    print("🔄 Running database migrations...")
-    upgrade()
-    print("✅ Migrations completed!")
+def run_migrations():
+    with app.app_context():
+        from flask_migrate import upgrade
+        print("🔄 Running database migrations...")
+        upgrade()
+        print("✅ Migrations completed!")
 
 # Hämta titel från miljövariabel eller använd default
 CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
@@ -93,6 +109,7 @@ CALENDAR_TITLE = os.getenv('CALENDAR_TITLE', 'Calendar')
 class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)  # Ny kolumn för beskrivning
     weekdays = db.Column(db.String(100), nullable=False)  # Stored as JSON string
     active = db.Column(db.Boolean, default=True)
     end_date = db.Column(db.Date, nullable=True)  # Slutdatum
@@ -102,6 +119,7 @@ class Schedule(db.Model):
         return {
             'id': self.id,
             'title': self.title,
+            'description': self.description,  # Lägg till beskrivning i JSON-svaret
             'weekdays': json.loads(self.weekdays),
             'active': self.active,
             'end_date': self.end_date.isoformat() if self.end_date else None,
@@ -112,8 +130,9 @@ class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
     task_type = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)  # Lägg till beskrivningsfält
     completed = db.Column(db.Boolean, default=False)
-    missed = db.Column(db.Boolean, default=False)  # Ny kolumn för missade uppgifter
+    missed = db.Column(db.Boolean, default=False)
     schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=True)
 
 def create_future_tasks():
@@ -158,6 +177,7 @@ def create_future_tasks():
                     all_tasks_to_create.append(Task(
                         date=current_date,
                         task_type=schedule.title,
+                        description=schedule.description,  # Kopiera beskrivningen från schemat
                         completed=False,
                         schedule_id=schedule.id
                     ))
@@ -202,8 +222,11 @@ def login():
     hashed_password = sha256(password.encode()).hexdigest()
 
     if hashed_password == PASSWORD_HASH:
-        session['logged_in'] = True
+        session.clear()  # Rensa eventuella gamla sessionsdata
+        session['is_logged_in'] = True
+        session.permanent = True  # Gör sessionen permanent
         record_login_attempt(client_ip, True)
+        print("Session created:", dict(session))  # Debug-utskrift
         return jsonify({'message': 'Login successful'})
     else:
         record_login_attempt(client_ip, False)
@@ -211,38 +234,40 @@ def login():
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
-    session.pop('logged_in', None)
+    print("Logging out, session before:", dict(session))  # Debug-utskrift
+    session.clear()  # Rensa hela sessionen
+    print("Session after logout:", dict(session))  # Debug-utskrift
     return jsonify({'message': 'Logged out successfully'})
 
 @app.route('/api/check-session')
 def check_session():
-    return jsonify({'logged_in': session.get('logged_in', False)})
-
-# Lägg till en decorator för att skydda routes som kräver inloggning
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not session.get('logged_in'):
-            return jsonify({'error': 'Unauthorized'}), 401
-        return f(*args, **kwargs)
-    return decorated_function
+    print("Checking session:", dict(session))  # Debug-utskrift
+    is_logged_in = session.get('is_logged_in', False)
+    print("Is logged in:", is_logged_in)  # Debug-utskrift
+    return jsonify({'logged_in': is_logged_in})
 
 @app.route('/api/schedules', methods=['GET'])
-@login_required
+@require_auth
 def get_schedules():
-    schedules = Schedule.query.all()
-    return jsonify([schedule.to_dict() for schedule in schedules])
+    try:
+        schedules = Schedule.query.all()
+        return jsonify([s.to_dict() for s in schedules])
+    except Exception as e:
+        logging.exception("Fel vid hämtning av scheman:")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/schedules', methods=['POST'])
 @require_auth
 def create_schedule():
     data = request.json
     title = data.get('title')
-    description = data.get('description')
+    description = data.get('description')  # Hämta beskrivning
     weekdays = data.get('weekdays', [])
     start_date = data.get('start_date')
     end_date = data.get('end_date')
     active = data.get('active', True)
+
+    logger.info(f"Creating schedule with description: {description}")  # Logga beskrivningen
 
     if not title or not weekdays or not start_date:
         return jsonify({'error': 'Missing required fields'}), 400
@@ -262,12 +287,13 @@ def create_schedule():
         # Skapa schemat
         schedule = Schedule(
             title=title,
-            description=description,
+            description=description,  # Lägg till beskrivning
             weekdays=json.dumps(weekdays),
             start_date=start_date_obj,
             end_date=end_date_obj,
             active=active
         )
+        logger.info(f"Created schedule object with description: {schedule.description}")  # Logga beskrivningen
         db.session.add(schedule)
         db.session.flush()  # Flush för att få schedule.id
 
@@ -285,7 +311,7 @@ def create_schedule():
                     schedule_id=schedule.id,
                     date=current_date,
                     task_type=title,
-                    description=description,
+                    description=description,  # Kopiera beskrivningen från schemat
                     completed=False,
                     missed=False
                 ))
@@ -300,16 +326,25 @@ def create_schedule():
         db.session.commit()
         return jsonify(schedule.to_dict()), 201
 
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': f'Ogiltigt datumformat: {str(e)}'}), 400
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error creating schedule: {str(e)}")
+        return jsonify({'error': 'Ett fel uppstod när schemat skulle skapas'}), 500
 
 @app.route('/api/schedules/<int:schedule_id>', methods=['PUT'])
 @require_auth
 def update_schedule(schedule_id):
     schedule = Schedule.query.get_or_404(schedule_id)
     data = request.json
+    logger.info(f"Updating schedule {schedule_id} with data: {data}")  # Logga inkommande data
+    
     schedule.title = data['title']
+    schedule.description = data.get('description')  # Uppdatera beskrivning
+    logger.info(f"Updated schedule description to: {schedule.description}")  # Logga beskrivningen
+    
     schedule.weekdays = json.dumps(data['weekdays'])
     schedule.active = data['active']
     
@@ -386,6 +421,7 @@ def get_tasks():
         'id': task.id,
         'date': task.date.strftime('%Y-%m-%d'),
         'task_type': task.task_type,
+        'description': task.description,  # Lägg till beskrivning i API-svaret
         'completed': task.completed,
         'missed': task.missed,
         'schedule_id': task.schedule_id
@@ -469,4 +505,6 @@ def check_reminders():
     return jsonify(reminders)
 
 if __name__ == "__main__":
+    # Kör migreringar om du vill, annars kommentera bort raden nedan
+    # run_migrations()
     app.run(debug=True) 

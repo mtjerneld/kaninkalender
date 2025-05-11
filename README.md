@@ -1,6 +1,6 @@
 # Kaninkalendern
 
-En enkel kalenderapp för att hålla koll på återkommande aktiviteter.
+En kalenderapplikation för att hantera återkommande aktiviteter.
 
 ## 🚀 Funktioner
 
@@ -19,23 +19,18 @@ En enkel kalenderapp för att hålla koll på återkommande aktiviteter.
 
 ### Installation
 
-1. Klona repot:
-   ```bash
-   git clone https://github.com/mtjerneld/kaninkalender.git
-   cd kaninkalender
+1. Klona repot
+2. Skapa en `.env` fil med följande variabler:
    ```
-
-2. Installera beroenden:
-   ```bash
-   pip install -r requirements.txt
+   DATABASE_URL=din_postgres_url
+   SECRET_KEY=ett_hemligt_värde
+   PASSWORD_HASH=hash_av_lösenord
+   API_KEY=din_api_nyckel
+   CALENDAR_TITLE=Kaninkalendern
    ```
-
-3. Starta applikationen:
-   ```bash
-   python app.py
-   ```
-
-4. Öppna webbläsaren och gå till `http://localhost:5000`
+3. Installera beroenden: `pip install -r requirements.txt`
+4. Kör migreringar: `flask db upgrade`
+5. Starta servern: `flask run`
 
 ## 🚢 Deployment på Render
 
@@ -172,4 +167,136 @@ python -m flask db migrate -m "beskrivning av ändringar"
 
 # Kör migrationer
 python -m flask db upgrade
-``` 
+```
+
+## API-dokumentation
+
+### Autentisering
+
+API:et stödjer två autentiseringsmetoder:
+
+1. **Session-baserad autentisering**
+   - Logga in via `/api/login` med lösenord
+   - Använd session-cookien för efterföljande anrop
+   - Exempel:
+     ```bash
+     # Logga in
+     curl -X POST http://localhost:5000/api/login \
+       -H "Content-Type: application/json" \
+       -d '{"password": "ditt_lösenord"}'
+     
+     # Använd API:et (cookien skickas automatiskt)
+     curl http://localhost:5000/api/tasks
+     ```
+
+2. **API-nyckel autentisering**
+   - Skicka API-nyckeln i `X-API-Key` headern
+   - Fungerar utan session
+   - Exempel:
+     ```bash
+     curl http://localhost:5000/api/tasks \
+       -H "X-API-Key: din_api_nyckel"
+     ```
+
+### Endpoints
+
+#### Scheman
+
+- `GET /api/schedules`
+  - Hämta alla scheman
+  - Kräver autentisering
+
+- `POST /api/schedules`
+  - Skapa nytt schema
+  - Body:
+    ```json
+    {
+      "title": "Aktivitetsnamn",
+      "description": "Beskrivning",
+      "weekdays": [1, 3, 5],  // 0=Måndag, 6=Söndag
+      "start_date": "2024-04-01",
+      "end_date": "2024-12-31",
+      "active": true
+    }
+    ```
+  - Kräver autentisering
+
+- `PUT /api/schedules/<id>`
+  - Uppdatera schema
+  - Samma body som POST
+  - Kräver autentisering
+
+- `DELETE /api/schedules/<id>`
+  - Ta bort schema
+  - Kräver autentisering
+
+#### Uppgifter
+
+- `GET /api/tasks`
+  - Hämta uppgifter
+  - Query-parametrar:
+    - `start_date`: Startdatum (YYYY-MM-DD)
+    - `end_date`: Slutdatum (YYYY-MM-DD)
+  - Kräver autentisering
+
+- `POST /api/tasks/<id>/toggle`
+  - Växla uppgiftens status
+  - Body:
+    ```json
+    {
+      "status": "completed"  // eller "missed"
+    }
+    ```
+  - Kräver autentisering
+
+- `POST /api/tasks/<id>/reschedule`
+  - Flytta uppgift till nytt datum
+  - Body:
+    ```json
+    {
+      "new_date": "2024-04-01"
+    }
+    ```
+  - Kräver autentisering
+
+### Exempel på API-anrop
+
+```bash
+# Hämta alla scheman med API-nyckel
+curl http://localhost:5000/api/schedules \
+  -H "X-API-Key: din_api_nyckel"
+
+# Skapa nytt schema med API-nyckel
+curl -X POST http://localhost:5000/api/schedules \
+  -H "X-API-Key: din_api_nyckel" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Vattna blommor",
+    "description": "Vattna alla blommor i vardagsrummet",
+    "weekdays": [1, 3, 5],
+    "start_date": "2024-04-01",
+    "end_date": "2024-12-31",
+    "active": true
+  }'
+
+# Hämta uppgifter för en period med API-nyckel
+curl "http://localhost:5000/api/tasks?start_date=2024-04-01&end_date=2024-04-30" \
+  -H "X-API-Key: din_api_nyckel"
+```
+
+## Utveckling
+
+### Databas
+
+- Använd PostgreSQL
+- Migreringar hanteras med Flask-Migrate
+- Kör `flask db migrate` för att skapa nya migreringar
+- Kör `flask db upgrade` för att applicera migreringar
+
+### Miljövariabler
+
+- `DATABASE_URL`: PostgreSQL-anslutningssträng
+- `SECRET_KEY`: Hemlig nyckel för sessions
+- `PASSWORD_HASH`: SHA-256 hash av lösenordet
+- `API_KEY`: API-nyckel för externa anrop
+- `CALENDAR_TITLE`: Titel som visas i kalendern 

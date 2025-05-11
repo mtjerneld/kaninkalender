@@ -280,6 +280,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
+                    credentials: 'include',
                     body: JSON.stringify({ password: password })
                 });
                 
@@ -343,7 +344,9 @@
                 startBlockCountdown(loginBox, originalContent);
             }
             
-            fetch('/api/check-session')
+            fetch('/api/check-session', {
+                credentials: 'include'  // Lägg till credentials
+            })
                 .then(response => response.json())
                 .then(data => {
                     if (data.logged_in) {
@@ -368,6 +371,7 @@
             const taskId = event.extendedProps.taskId;
             const isCompleted = event.extendedProps.completed;
             const isMissed = event.extendedProps.missed;
+            const description = event.extendedProps.description;
             const originalDate = event.start;
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -380,6 +384,7 @@
                     <h3>${event.title}</h3>
                     <span class="rabbit-icon">🐰</span>
                 </div>
+                ${description ? `<p class="task-description">${description}</p>` : ''}
                 <p>Planerat datum: ${event.start.toLocaleDateString('sv-SE')}</p>
                 ${isPastOrToday ? `
                     <div class="task-status">
@@ -424,7 +429,9 @@
 
         async function loadSchedules() {
             try {
-                const response = await fetch('/api/schedules');
+                const response = await fetch('/api/schedules', {
+                    credentials: 'include'
+                });
                 schedules = await response.json();
                 displaySchedules();
             } catch (error) {
@@ -446,6 +453,7 @@
                 scheduleElement.innerHTML = `
                     <div class="schedule-info">
                         <h4>${schedule.title}</h4>
+                        ${schedule.description ? `<p class="schedule-description">${schedule.description}</p>` : ''}
                         <p>Dagar: ${scheduleDays}</p>
                         <p>Status: ${schedule.active ? 'Aktiv' : 'Inaktiv'}</p>
                         ${schedule.start_date ? `<p>Startdatum: ${schedule.start_date}</p>` : ''}
@@ -498,112 +506,128 @@
                 end_date: endDate || null
             };
 
-            const url = editingScheduleId 
-                ? `/api/schedules/${editingScheduleId}`
-                : '/api/schedules';
-            
-            const method = editingScheduleId ? 'PUT' : 'POST';
+            try {
+                const response = await fetch('/api/schedules', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify(scheduleData)
+                });
 
-            const response = await fetch(url, {
-                method,
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(scheduleData)
-            });
-
-            if (response.ok) {
-                await loadSchedules();
-                hideScheduleForm();
-                await loadTasks();
+                if (response.ok) {
+                    hideScheduleForm();
+                    await loadSchedules();  // Uppdatera schemalisten
+                    await loadTasks();      // Uppdatera kalendern
+                    calendar.refetchEvents(); // Uppdatera kalendervy
+                } else {
+                    const data = await response.json();
+                    alert(data.error || 'Ett fel uppstod när schemat skulle sparas');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ett fel uppstod när schemat skulle sparas');
             }
         }
 
-        async function editSchedule(scheduleId) {
-            try {
-                const response = await fetch(`/api/schedules/${scheduleId}`);
-                const schedule = await response.json();
-                
-                document.getElementById('editActivityTitle').value = schedule.title;
-                document.getElementById('editEndDate').value = schedule.end_date || '';
-                document.getElementById('editStartDate').value = schedule.start_date || '';
-                document.getElementById('editActiveCheck').checked = schedule.active;
-                
-                for (let i = 0; i < 7; i++) {
-                    document.getElementById(`editDay${i}`).checked = false;
-                }
-                
-                schedule.weekdays.forEach(day => {
-                    document.getElementById(`editDay${day}`).checked = true;
-                });
-                
-                document.getElementById('editScheduleId').value = scheduleId;
-                
-                const modal = new bootstrap.Modal(document.getElementById('editActivityModal'));
-                modal.show();
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Ett fel uppstod vid hämtning av aktiviteten');
-            }
+        async function editSchedule(id) {
+            const schedule = schedules.find(s => s.id === id);
+            if (!schedule) return;
+
+            editingScheduleId = id;  // Sätt det aktuella schemat som redigeras
+            
+            // Fyll i formuläret med schemats data
+            document.getElementById('editActivityName').value = schedule.title;
+            document.getElementById('editActivityDescription').value = schedule.description || '';  // Lägg till beskrivning
+            document.getElementById('editActivityStartDate').value = schedule.start_date;
+            document.getElementById('editActivityEndDate').value = schedule.end_date || '';
+
+            // Återställ och markera rätt veckodagar
+            document.querySelectorAll('input[name="editDays"]').forEach(cb => {
+                cb.checked = schedule.weekdays.includes(parseInt(cb.value));
+            });
+
+            // Visa modal
+            const editModal = new bootstrap.Modal(document.getElementById('editActivityModal'));
+            editModal.show();
         }
 
         async function updateSchedule() {
-            const scheduleId = document.getElementById('editScheduleId').value;
-            const title = document.getElementById('editActivityTitle').value;
-            const weekdays = [];
-            for (let i = 0; i < 7; i++) {
-                if (document.getElementById(`editDay${i}`).checked) {
-                    weekdays.push(i);
-                }
-            }
-            const active = document.getElementById('editActiveCheck').checked;
-            const endDate = document.getElementById('editEndDate').value;
-            const startDate = document.getElementById('editStartDate').value;
-
-            if (!title || weekdays.length === 0) {
-                alert('Vänligen fyll i titel och välj minst en dag');
+            if (!editingScheduleId) {
+                alert('Inget schema valt för redigering');
                 return;
             }
 
+            const title = document.getElementById('editActivityName').value;
+            const description = document.getElementById('editActivityDescription').value;
+            const weekdays = Array.from(document.querySelectorAll('input[name="editDays"]:checked'))
+                .map(cb => parseInt(cb.value));
+            const startDate = document.getElementById('editActivityStartDate').value;
+            const endDate = document.getElementById('editActivityEndDate').value;
+
+            if (!title || weekdays.length === 0 || !startDate) {
+                alert('Vänligen fyll i alla obligatoriska fält');
+                return;
+            }
+
+            const scheduleData = {
+                title,
+                description,
+                weekdays,
+                start_date: startDate,
+                end_date: endDate || null,
+                active: true
+            };
+
             try {
-                const response = await fetch(`/api/schedules/${scheduleId}`, {
+                const response = await fetch(`/api/schedules/${editingScheduleId}`, {
                     method: 'PUT',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        title,
-                        weekdays,
-                        active,
-                        end_date: endDate || null,
-                        start_date: startDate || null
-                    })
+                    credentials: 'include',
+                    body: JSON.stringify(scheduleData)
                 });
 
                 if (response.ok) {
                     const modal = bootstrap.Modal.getInstance(document.getElementById('editActivityModal'));
                     modal.hide();
-                    loadSchedules();
+                    await loadSchedules();  // Uppdatera schemalisten
+                    await loadTasks();      // Uppdatera kalendern
+                    calendar.refetchEvents(); // Uppdatera kalendervy
+                    editingScheduleId = null;  // Återställ redigerings-ID
                 } else {
-                    const error = await response.json();
-                    alert('Fel vid uppdatering: ' + error.error);
+                    const data = await response.json();
+                    alert(data.error || 'Ett fel uppstod när schemat skulle uppdateras');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('Ett fel uppstod vid uppdatering av aktiviteten');
+                alert('Ett fel uppstod när schemat skulle uppdateras');
             }
         }
 
         async function deleteSchedule(scheduleId) {
-            if (!confirm('Är du säker på att du vill ta bort denna aktivitet?')) return;
+            if (!confirm('Är du säker på att du vill ta bort detta schema?')) {
+                return;
+            }
 
-            const response = await fetch(`/api/schedules/${scheduleId}`, {
-                method: 'DELETE'
-            });
+            try {
+                const response = await fetch(`/api/schedules/${scheduleId}`, {
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
 
-            if (response.ok) {
-                await loadSchedules();
-                await loadTasks();
+                if (response.ok) {
+                    await loadSchedules();  // Uppdatera schemalisten
+                    await loadTasks();      // Uppdatera kalendern
+                    calendar.refetchEvents(); // Uppdatera kalendervy
+                } else {
+                    alert('Ett fel uppstod när schemat skulle tas bort');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ett fel uppstod när schemat skulle tas bort');
             }
         }
 
@@ -616,6 +640,7 @@
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                credentials: 'include',
                 body: JSON.stringify({ new_date: newDate })
             });
             
@@ -637,7 +662,9 @@
             }
             
             try {
-                const response = await fetch(`/api/tasks?start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}`);
+                const response = await fetch(`/api/tasks?start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}`, {
+                    credentials: 'include'
+                });
                 if (!response.ok) {
                     throw new Error('Kunde inte hämta uppgifter');
                 }
@@ -677,6 +704,7 @@
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                credentials: 'include',
                 body: JSON.stringify({ status: status })
             });
 
@@ -745,7 +773,8 @@
         async function logout() {
             try {
                 await fetch('/api/logout', {
-                    method: 'POST'
+                    method: 'POST',
+                    credentials: 'include'  // Lägg till credentials
                 });
                 
                 document.getElementById('login').style.display = 'block';
@@ -781,6 +810,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
+                    credentials: 'include',
                     body: JSON.stringify({
                         title: name,
                         description,
@@ -806,77 +836,6 @@
             } catch (error) {
                 console.error('Fel vid skapande av aktivitet:', error);
                 alert(error.message || 'Ett fel uppstod när aktiviteten skulle skapas');
-            }
-        }
-
-        async function editSchedule(id) {
-            const schedule = schedules.find(s => s.id === id);
-            if (!schedule) return;
-
-            document.getElementById('editActivityName').value = schedule.title;
-            document.getElementById('editActivityDescription').value = schedule.description || '';
-            document.getElementById('editActivityStartDate').value = schedule.start_date;
-            document.getElementById('editActivityEndDate').value = schedule.end_date;
-
-            document.querySelectorAll('input[name="editDays"]').forEach(cb => {
-                cb.checked = false;
-            });
-
-            schedule.weekdays.forEach(day => {
-                const checkbox = document.querySelector(`input[name="editDays"][value="${day}"]`);
-                if (checkbox) checkbox.checked = true;
-            });
-
-            document.getElementById('editActivityForm').dataset.scheduleId = id;
-
-            const editModal = new bootstrap.Modal(document.getElementById('editActivityModal'));
-            editModal.show();
-        }
-
-        async function updateSchedule() {
-            const id = document.getElementById('editActivityForm').dataset.scheduleId;
-            const name = document.getElementById('editActivityName').value;
-            const description = document.getElementById('editActivityDescription').value;
-            const days = Array.from(document.querySelectorAll('input[name="editDays"]:checked')).map(cb => parseInt(cb.value));
-            const startDate = document.getElementById('editActivityStartDate').value;
-            const endDate = document.getElementById('editActivityEndDate').value;
-
-            if (!name || days.length === 0 || !startDate || !endDate) {
-                alert('Vänligen fyll i alla obligatoriska fält');
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/schedules/${id}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        title: name,
-                        description,
-                        weekdays: days,
-                        start_date: startDate,
-                        end_date: endDate,
-                        active: true
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error('Kunde inte uppdatera aktiviteten');
-                }
-
-                const updatedSchedule = await response.json();
-                const index = schedules.findIndex(s => s.id === id);
-                if (index !== -1) {
-                    schedules[index] = updatedSchedule;
-                }
-                displaySchedules();
-                loadTasks();
-                bootstrap.Modal.getInstance(document.getElementById('editActivityModal')).hide();
-            } catch (error) {
-                console.error('Fel vid uppdatering av aktivitet:', error);
-                alert('Ett fel uppstod när aktiviteten skulle uppdateras');
             }
         }
     </script>

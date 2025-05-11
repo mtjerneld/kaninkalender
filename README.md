@@ -51,7 +51,6 @@ Applikationen är konfigurerad för deployment på Render med följande egenskap
 ```
 kaninkalender/
 ├── app.py              # Huvudapplikation
-├── migrate.py          # Databasinitialisering
 ├── requirements.txt    # Python-beroenden
 ├── render.yaml         # Render-konfiguration
 ├── static/            # Statiska filer (CSS, JS)
@@ -147,27 +146,21 @@ Appen tillhandahåller följande API-endpoints. Alla endpoints kräver API-nycke
 
 ## Beroenden
 
-- Flask==3.0.2
-- Flask-SQLAlchemy==3.1.1
-- Flask-Migrate==4.0.5
-- psycopg2-binary==2.9.9
-- python-dotenv>=1.0.0
-- gunicorn==21.2.0
+- Flask==2.2.5
+- Flask-SQLAlchemy==2.5.1
+- Flask-Migrate==3.1.0
+- SQLAlchemy==1.4.49
+- psycopg2-binary==2.9.1
+- python-dotenv==0.19.0
+- gunicorn==20.1.0
+- Flask-WTF==1.0.0
+- python-dateutil==2.8.2
+- alembic==1.13.1
+- Werkzeug==2.2.3
 
 ## Databasmigrationer
 
-För att köra databasmigrationer:
-
-```bash
-# Initiera migrations (endast första gången)
-python -m flask db init
-
-# Skapa ny migration
-python -m flask db migrate -m "beskrivning av ändringar"
-
-# Kör migrationer
-python -m flask db upgrade
-```
+Databasen initialiseras automatiskt vid första körning. Om du behöver återställa databasen, ta bort filen `instance/kaninkalender.db` och starta om applikationen.
 
 ## API-dokumentation
 

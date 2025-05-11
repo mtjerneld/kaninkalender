@@ -108,7 +108,7 @@ if database_url and database_url.startswith('postgres://'):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.json.ensure_ascii = False  # Tillåt icke-ASCII tecken i JSON
+app.config['JSON_AS_ASCII'] = False  # Tillåt icke-ASCII tecken i JSON
 
 # API-nyckel från miljövariabel
 API_KEY = os.getenv('API_KEY')
